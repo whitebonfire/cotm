@@ -19,6 +19,32 @@ export const DOOR_WIDTH = 2.4;
 export const DOOR_HEIGHT = 2.3;
 export const PLAYER_RADIUS = 0.42;
 
+/**
+ * Metres per second — for EVERY body in the house, player and NPC alike.
+ *
+ * This is a game rule wearing a constant's clothes. If NPCs strolled at 2.5
+ * and a player moved at 4.2, the Spy would be the one power-walking through a
+ * cocktail party and the Detective would spot them in four seconds flat. The
+ * disguise only works if a human body and an AI body move at the same rate,
+ * so there is one constant and both sides import it.
+ *
+ * The intended tell is pathing *style* — humans stutter, backtrack, and stop
+ * dead; NPCs glide between anchors — not raw speed. See SOW section 4.3
+ * (`impersonate`), which exists precisely to paper over that difference.
+ */
+export const SPEED = 4.2;
+
+/** What a body is doing. Players can do all of these too — that's the point. */
+export enum Action {
+  IDLE = 0,
+  WALK = 1,
+  READ = 2,
+  DRINK = 3,
+  EXAMINE = 4,
+  TALK = 5,
+  LOOK = 6,
+}
+
 /** Footprint. Everything lives inside this. */
 export const HOUSE = { x1: -20, z1: -15, x2: 20, z2: 15 } as const;
 

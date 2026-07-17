@@ -15,6 +15,7 @@ import {
   resolveCollisions,
   roomAt,
 } from "../dist/server/world/house.js";
+import { ANCHORS, GRAPH, findDoorPath } from "../dist/server/world/nav.js";
 
 const results = [];
 const check = (name, pass, detail = "") => {
@@ -123,6 +124,54 @@ for (const room of ROOMS) {
   }
 }
 check("no walled-off pockets of floor", orphans === 0, `${orphans} unreachable cells`);
+
+// ---- anchors: every place a guest can stand must be standable
+let buried = 0;
+let misfiled = 0;
+let unreachable = 0;
+for (const anchor of ANCHORS) {
+  const solved = resolveCollisions(anchor.x, anchor.z);
+  if (Math.hypot(solved.x - anchor.x, solved.z - anchor.z) > 1e-6) {
+    buried++;
+    console.log(`         ${anchor.id} is inside a wall`);
+  }
+  const room = roomAt(anchor.x, anchor.z);
+  if (!room || room.id !== anchor.room) {
+    misfiled++;
+    console.log(`         ${anchor.id} claims room "${anchor.room}" but sits in "${room?.id ?? "nowhere"}"`);
+  }
+  if (!seen.has(key(toIx(anchor.x), toIz(anchor.z)))) unreachable++;
+}
+check("no anchor is buried in a wall", buried === 0, `${buried} of ${ANCHORS.length}`);
+check("every anchor is in the room it claims", misfiled === 0, `${misfiled} of ${ANCHORS.length}`);
+check("every anchor is reachable on foot", unreachable === 0, `${unreachable} of ${ANCHORS.length}`);
+
+// Two guests must never be sent to the same spot.
+const tooClose = [];
+for (let i = 0; i < ANCHORS.length; i++) {
+  for (let j = i + 1; j < ANCHORS.length; j++) {
+    const d = Math.hypot(ANCHORS[i].x - ANCHORS[j].x, ANCHORS[i].z - ANCHORS[j].z);
+    if (d < 0.9) tooClose.push(`${ANCHORS[i].id}~${ANCHORS[j].id} (${d.toFixed(2)}m)`);
+  }
+}
+check("no two anchors overlap", tooClose.length === 0, tooClose.join(", ") || "all clear");
+
+// The party is 12 bodies; there must be somewhere for all of them to be.
+check("enough anchors for the whole party", ANCHORS.length >= 12, `${ANCHORS.length} anchors for 12 guests`);
+
+// ---- pathfinding must work between every pair of rooms, or an NPC routed
+// somewhere unreachable simply stands still forever.
+let noRoute = 0;
+for (const from of ROOMS) {
+  for (const to of ROOMS) {
+    if (from.id === to.id) continue;
+    if (findDoorPath(from.id, to.id).length === 0) {
+      noRoute++;
+      console.log(`         no route ${from.id} -> ${to.id}`);
+    }
+  }
+}
+check("every room can be routed to from every other room", noRoute === 0, `${noRoute} broken pairs`);
 
 const failed = results.filter((r) => !r.pass);
 console.log(`\n${results.length - failed.length}/${results.length} passed`);

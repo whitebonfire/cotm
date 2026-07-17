@@ -113,6 +113,78 @@ export function buildHouse(scene: THREE.Scene): { colliders: THREE.Object3D[] } 
   return { colliders };
 }
 
+/**
+ * The things people are standing at.
+ *
+ * The anchors in nav.ts already say "someone reads here", "someone drinks
+ * here". This gives those claims something to be true about — a body reading
+ * at a bare wall reads as a bug, not as a guest.
+ */
+export function buildFurniture(scene: THREE.Scene) {
+  const group = new THREE.Group();
+  scene.add(group);
+
+  const wood = new THREE.MeshStandardMaterial({ color: 0x4a3a24, roughness: 0.8 });
+  const dark = new THREE.MeshStandardMaterial({ color: 0x2e2620, roughness: 0.85 });
+  const cloth = new THREE.MeshStandardMaterial({ color: 0x5c3a48, roughness: 0.9 });
+  const glass = new THREE.MeshStandardMaterial({
+    color: 0x9fd6e8,
+    roughness: 0.15,
+    metalness: 0.1,
+    transparent: true,
+    opacity: 0.34,
+  });
+
+  const box = (
+    mat: THREE.Material,
+    w: number,
+    h: number,
+    d: number,
+    x: number,
+    y: number,
+    z: number
+  ) => {
+    const mesh = new THREE.Mesh(new THREE.BoxGeometry(w, h, d), mat);
+    mesh.position.set(x, y, z);
+    mesh.castShadow = true;
+    mesh.receiveShadow = true;
+    group.add(mesh);
+    return mesh;
+  };
+
+  // Library: shelves down the west wall
+  for (let z = -14; z <= -6; z += 2) box(wood, 0.5, 2.4, 1.8, -19.5, 1.2, z);
+
+  // Study: display cases along the north wall — the jewels live here
+  for (const x of [-3.5, 0, 3.5]) {
+    box(dark, 1.6, 0.9, 0.6, x, 0.45, -14.4);
+    box(glass, 1.5, 0.7, 0.5, x, 1.25, -14.4);
+  }
+
+  // Kitchen: counter
+  box(dark, 12, 0.95, 0.7, 11.5, 0.48, -14.4);
+
+  // Conservatory: windows onto the city, and a couple of plants
+  for (const z of [0, 4, 8]) box(glass, 0.12, 2.2, 3.4, -19.7, 1.5, z);
+  box(dark, 0.5, 0.5, 0.5, -16.5, 0.25, 11);
+
+  // Ballroom: the bar
+  box(wood, 5, 1.05, 0.8, -8.2, 0.52, -4.4);
+
+  // Dining: the long table
+  box(cloth, 6.5, 0.08, 2.6, 12.5, 0.78, 4);
+  for (const [x, z] of [
+    [9.7, 3],
+    [15.3, 3],
+    [9.7, 5],
+    [15.3, 5],
+  ])
+    box(dark, 0.12, 0.78, 0.12, x, 0.39, z);
+
+  // Entrance Hall: a console table by the door
+  box(wood, 2.2, 0.8, 0.5, 3, 0.4, 14.4);
+}
+
 /** Floating room names, so it's obvious the floor plan is real. */
 export function buildRoomLabels(scene: THREE.Scene) {
   for (const room of ROOMS) {

@@ -1,16 +1,24 @@
 import * as THREE from "three";
 import { Client, getStateCallbacks } from "colyseus.js";
 import type { Room } from "colyseus.js";
-import type { HouseState, Player } from "../../server/src/schema/GameState";
-import { resolveCollisions, roomAt } from "../../server/src/world/house";
-import { buildHouse, buildRoomLabels } from "./house";
-
-/** Must match HouseRoom.ts, or prediction fights the server. */
-const SPEED = 4.2;
+import type { HouseState, Person } from "../../server/src/schema/GameState";
+import { Action, SPEED, resolveCollisions, roomAt } from "../../server/src/world/house";
+import { buildHouse, buildRoomLabels, buildFurniture } from "./house";
+import { buildPerson, animatePerson, type PersonRig } from "./person";
 
 const EYE = 1.25;
 const CAM_DIST = 6.0;
 const CAM_MIN = 1.1;
+
+const ACTION_NAME: Record<number, string> = {
+  [Action.IDLE]: "standing about",
+  [Action.WALK]: "walking",
+  [Action.READ]: "reading",
+  [Action.DRINK]: "drinking",
+  [Action.EXAMINE]: "examining",
+  [Action.TALK]: "talking",
+  [Action.LOOK]: "looking out",
+};
 
 // ---------------------------------------------------------------- scene
 
@@ -29,7 +37,6 @@ document.body.appendChild(renderer.domElement);
 
 scene.add(new THREE.HemisphereLight(0x5f6b86, 0x1a1712, 0.55));
 
-// Moonlight through the (imaginary) roof. This is the only shadow caster.
 const key = new THREE.DirectionalLight(0xaebfe0, 0.75);
 key.position.set(14, 26, 10);
 key.castShadow = true;
@@ -43,43 +50,35 @@ key.shadow.bias = -0.0012;
 scene.add(key);
 
 const { colliders } = buildHouse(scene);
+buildFurniture(scene);
 buildRoomLabels(scene);
 
-// ---------------------------------------------------------------- avatars
+// ---------------------------------------------------------------- bodies
 
-interface Avatar {
-  group: THREE.Group;
-  player: Player;
+interface Body {
+  rig: PersonRig;
+  person: Person;
+  /** Where the server last said they are. */
   target: THREE.Vector3;
+  /** Smoothed metres/sec, for the walk cycle. */
+  speed: number;
+  prev: THREE.Vector3;
 }
 
-const avatars = new Map<string, Avatar>();
+const bodies = new Map<string, Body>();
 
-function makeAvatar(hue: number, isSelf: boolean): THREE.Group {
-  const group = new THREE.Group();
-  const color = new THREE.Color().setHSL(hue / 360, isSelf ? 0.5 : 0.32, isSelf ? 0.62 : 0.48);
+/** Which body is mine. Told to me by the server; nobody else's is knowable. */
+let myBody: string | null = null;
 
-  const body = new THREE.Mesh(
-    new THREE.CapsuleGeometry(0.36, 1.05, 6, 14),
-    new THREE.MeshStandardMaterial({ color, roughness: 0.62 })
-  );
-  body.position.y = 0.9;
-  body.castShadow = true;
-  group.add(body);
-
-  // Nose points +Z. Server sends yaw = atan2(dx, dz), so rotation.y = yaw aims
-  // this the way the body is actually moving.
-  const nose = new THREE.Mesh(
-    new THREE.ConeGeometry(0.11, 0.3, 10),
-    new THREE.MeshStandardMaterial({ color: 0xe8e6e1, roughness: 0.5 })
-  );
-  nose.rotation.x = Math.PI / 2;
-  nose.position.set(0, 1.18, 0.36);
-  nose.castShadow = true;
-  group.add(nose);
-
-  return group;
-}
+/** A faint ring under my own feet — client-side only, never a state field. */
+const selfRing = new THREE.Mesh(
+  new THREE.RingGeometry(0.42, 0.52, 24),
+  new THREE.MeshBasicMaterial({ color: 0xd8b46a, transparent: true, opacity: 0.5, side: THREE.DoubleSide })
+);
+selfRing.rotation.x = -Math.PI / 2;
+selfRing.position.y = 0.03;
+selfRing.visible = false;
+scene.add(selfRing);
 
 // ---------------------------------------------------------------- input
 
@@ -89,6 +88,7 @@ let camPitch = 0.3;
 let locked = false;
 
 window.addEventListener("keydown", (e) => {
+  if (!keys.has(e.code) && e.code === "KeyE" && room) room.send("act");
   keys.add(e.code);
   if (e.code === "Space") e.preventDefault();
 });
@@ -106,7 +106,9 @@ document.addEventListener("pointerlockchange", () => {
 document.addEventListener("mousemove", (e) => {
   if (!locked) return;
   camYaw -= e.movementX * 0.0026;
-  camPitch = Math.max(-0.2, Math.min(1.1, camPitch - e.movementY * 0.0022));
+  // Mouse up => look up. camPitch is the camera's height above the shoulder,
+  // so pushing up must LOWER the camera to tilt the view skyward.
+  camPitch = Math.max(-0.35, Math.min(1.15, camPitch + e.movementY * 0.0022));
 });
 
 window.addEventListener("resize", () => {
@@ -123,7 +125,6 @@ const endpoint = import.meta.env.DEV
 
 let room: Room<HouseState> | null = null;
 
-/** Predicted local position. Server still owns the truth; this just hides RTT. */
 const localPos = new THREE.Vector3();
 let localYaw = Math.PI;
 
@@ -153,28 +154,57 @@ playBtn.addEventListener("click", async () => {
   }
 });
 
+function addBody(person: Person, id: string) {
+  const rig = buildPerson({
+    skin: person.skin,
+    hair: person.hair,
+    hairHue: person.hairHue,
+    outfitHue: person.outfitHue,
+    outfitVal: person.outfitVal,
+    age: person.age,
+    hat: person.hat,
+    acc: person.acc,
+    height: person.height,
+  });
+  rig.group.position.set(person.x, person.y, person.z);
+  rig.group.rotation.y = person.yaw;
+  scene.add(rig.group);
+
+  bodies.set(id, {
+    rig,
+    person,
+    target: new THREE.Vector3(person.x, person.y, person.z),
+    speed: 0,
+    prev: new THREE.Vector3(person.x, person.y, person.z),
+  });
+}
+
 function wire(room: Room<HouseState>) {
   const $ = getStateCallbacks(room);
 
-  $(room.state).players.onAdd((player: Player, sessionId: string) => {
-    const isSelf = sessionId === room.sessionId;
-    const group = makeAvatar(player.hue, isSelf);
-    group.position.set(player.x, player.y, player.z);
-    scene.add(group);
-
-    avatars.set(sessionId, { group, player, target: new THREE.Vector3(player.x, player.y, player.z) });
-
-    if (isSelf) {
-      localPos.set(player.x, player.y, player.z);
-      localYaw = player.yaw;
+  room.onMessage("you", (msg: { body: string; name: string }) => {
+    myBody = msg.body;
+    selfRing.visible = true;
+    const mine = bodies.get(msg.body);
+    if (mine) {
+      localPos.set(mine.person.x, mine.person.y, mine.person.z);
+      localYaw = mine.person.yaw;
     }
   });
 
-  $(room.state).players.onRemove((_player: Player, sessionId: string) => {
-    const avatar = avatars.get(sessionId);
-    if (!avatar) return;
-    scene.remove(avatar.group);
-    avatars.delete(sessionId);
+  $(room.state).people.onAdd((person: Person, id: string) => {
+    addBody(person, id);
+    if (id === myBody) {
+      localPos.set(person.x, person.y, person.z);
+      localYaw = person.yaw;
+    }
+  });
+
+  $(room.state).people.onRemove((_person: Person, id: string) => {
+    const body = bodies.get(id);
+    if (!body) return;
+    scene.remove(body.rig.group);
+    bodies.delete(id);
   });
 
   room.onLeave((code) => {
@@ -192,6 +222,7 @@ const raycaster = new THREE.Raycaster();
 const focusPoint = new THREE.Vector3();
 const camDir = new THREE.Vector3();
 let sendAccum = 0;
+let elapsed = 0;
 
 function currentInput() {
   const f = (keys.has("KeyW") ? 1 : 0) - (keys.has("KeyS") ? 1 : 0);
@@ -202,10 +233,10 @@ function currentInput() {
 function tick() {
   requestAnimationFrame(tick);
   const dt = Math.min(clock.getDelta(), 0.1);
+  elapsed += dt;
 
   const input = currentInput();
 
-  // Send intent at 20Hz. Never a position — the server decides where we are.
   if (room) {
     sendAccum += dt;
     if (sendAccum >= 0.05) {
@@ -214,7 +245,7 @@ function tick() {
     }
   }
 
-  const self = room ? avatars.get(room.sessionId) : undefined;
+  const self = myBody ? bodies.get(myBody) : undefined;
 
   if (self) {
     const forwardX = -Math.sin(camYaw);
@@ -230,15 +261,13 @@ function tick() {
       dx = (dx / len) * SPEED * dt;
       dz = (dz / len) * SPEED * dt;
 
-      // Same walls, same maths as the server. If these ever diverge, this is
-      // where the rubber-banding starts.
       const solved = resolveCollisions(localPos.x + dx, localPos.z + dz);
       localPos.x = solved.x;
       localPos.z = solved.z;
       localYaw = Math.atan2(dx, dz);
     }
 
-    const server = self.player;
+    const server = self.person;
     const drift = Math.hypot(localPos.x - server.x, localPos.z - server.z);
     if (drift > 2) {
       localPos.set(server.x, server.y, server.z);
@@ -248,23 +277,37 @@ function tick() {
       localPos.z += (server.z - localPos.z) * k;
     }
 
-    self.group.position.copy(localPos);
-    self.group.rotation.y = localYaw;
+    self.rig.group.position.copy(localPos);
+    // Server owns facing while performing an action (it aims you at the shelf),
+    // but movement is predicted, so use the local yaw only while walking.
+    self.rig.group.rotation.y = len > 0.001 ? localYaw : server.yaw;
+
+    selfRing.position.set(localPos.x, 0.03, localPos.z);
   }
 
-  // Remote avatars: ease toward the last state we were sent.
-  avatars.forEach((avatar, sessionId) => {
-    if (room && sessionId === room.sessionId) return;
-    avatar.target.set(avatar.player.x, avatar.player.y, avatar.player.z);
-    avatar.group.position.lerp(avatar.target, 1 - Math.pow(0.0015, dt));
+  // ---- everyone else eases toward the last state we were sent
+  bodies.forEach((body, id) => {
+    if (id !== myBody) {
+      body.target.set(body.person.x, body.person.y, body.person.z);
+      body.rig.group.position.lerp(body.target, 1 - Math.pow(0.0015, dt));
 
-    let delta = avatar.player.yaw - avatar.group.rotation.y;
-    while (delta > Math.PI) delta -= Math.PI * 2;
-    while (delta < -Math.PI) delta += Math.PI * 2;
-    avatar.group.rotation.y += delta * (1 - Math.pow(0.0015, dt));
+      let delta = body.person.yaw - body.rig.group.rotation.y;
+      while (delta > Math.PI) delta -= Math.PI * 2;
+      while (delta < -Math.PI) delta += Math.PI * 2;
+      body.rig.group.rotation.y += delta * (1 - Math.pow(0.0015, dt));
+    }
+
+    // Measure real speed from the rendered position rather than trusting the
+    // action field — a body being eased toward a distant target should have
+    // legs that keep up with where it's actually going.
+    const moved = body.rig.group.position.distanceTo(body.prev) / Math.max(dt, 0.001);
+    body.speed += (moved - body.speed) * Math.min(1, dt * 9);
+    body.prev.copy(body.rig.group.position);
+
+    animatePerson(body.rig, body.person.action, body.speed, elapsed);
   });
 
-  // ---- third-person camera, pulled in so it doesn't sit inside a wall
+  // ---- third-person camera
   focusPoint.set(localPos.x, localPos.y + EYE, localPos.z);
 
   const cosP = Math.cos(camPitch);
@@ -274,20 +317,20 @@ function tick() {
   raycaster.set(focusPoint, camDir);
   raycaster.far = CAM_DIST;
   const hits = raycaster.intersectObjects(colliders, false);
-  if (hits.length > 0) {
-    dist = Math.max(CAM_MIN, hits[0].distance - 0.32);
-  }
+  if (hits.length > 0) dist = Math.max(CAM_MIN, hits[0].distance - 0.32);
 
   camera.position.copy(focusPoint).addScaledVector(camDir, dist);
+  camera.position.y = Math.max(0.35, camera.position.y);
   camera.lookAt(focusPoint);
 
   if (room) {
     const here = roomAt(localPos.x, localPos.z);
+    const doing = self ? ACTION_NAME[self.person.action] ?? "" : "";
     hud.innerHTML = [
-      `<b>🔎 clues of the mind</b> — milestone 2`,
-      `<b>${here?.name ?? "…"}</b>`,
-      `room ${room.roomId} · you are <b>${self?.player.name ?? "…"}</b> · <b>${avatars.size}</b> here`,
-      locked ? `` : `<b>click</b> to look around`,
+      `<b>🔎 clues of the mind</b> — milestone 3`,
+      `<b>${here?.name ?? "…"}</b> · ${bodies.size} guests`,
+      `you are <b>${self?.person.name ?? "…"}</b>, ${doing}`,
+      locked ? `<b>E</b> to join in at a spot` : `<b>click</b> to look around`,
     ].join("<br />");
   }
 

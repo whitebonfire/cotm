@@ -4,7 +4,7 @@ A browser-based 3D detective game. One Detective, one Spy, twelve AI partygoers,
 
 See [SOW.md](./SOW.md) for the design. This README is about running the thing.
 
-**Current state: milestone 2 — the house.** Seven lit rooms you can walk around with a friend, with walls the server enforces. No NPCs, no roles, no abilities yet.
+**Current state: milestone 3 — the bodies.** Twelve guests at a party in a seven-room house: reading, drinking, examining the jewels, gossiping in circles, drifting between rooms. You are one of them. No roles, no abilities, no interview yet.
 
 ```
         -20        -6    0    6              20
@@ -18,10 +18,14 @@ See [SOW.md](./SOW.md) for the design. This README is about running the thing.
          │ORY │ ENTRANCE    │                 │
     15   └────┴─────────────┴─────────────────┘
 
-   gaps in the lines are doorways · you spawn in the Entrance Hall
+   gaps in the lines are doorways · you wake up as whichever guest you took over
 ```
 
 Every room has at least two ways out — the Ballroom has four. That's deliberate: a Spy needs to leave by a door they didn't come in by, and a Detective needs to be losable. `npm run test:house` enforces it.
+
+**You don't join the party — you take over a guest.** There are always exactly twelve bodies. When you connect, one of them quietly stops being driven by the AI and starts being driven by you, keeping its name, face, and accessory. Leave, and the AI picks it back up mid-stride. That's the Spy mechanic, built early on purpose: it's the only way to know whether the disguise actually holds.
+
+Press `E` near a spot to join in with whatever happens there — read the book, take a drink, look out at the city. Those are the same actions the NPCs perform, from the same list, because that's the camouflage.
 
 ---
 
@@ -54,11 +58,18 @@ npm start &          # this one needs a server
 npm run test:spine
 ```
 
-`scripts/house-check.mjs` validates the floor plan itself: flood-fills the house from the front door and asserts every room is reachable, every room has two or more exits, no pocket of floor is walled off, and no spawn point sits inside a wall.
+`scripts/house-check.mjs` validates the floor plan itself: flood-fills the house and asserts every room is reachable, every room has two or more exits, no pocket of floor is walled off, no spawn or anchor sits inside a wall, no two anchors overlap, and every room can be routed to from every other room.
 
-`scripts/spine-test.mjs` is the netcode acceptance test. It connects two real clients and asserts they share a room, see each other move, that speed and direction are right, that walls stop you and doorways don't, that nobody can escape the house, that leaving cleans up — and that the server ignores a client trying to teleport itself.
+`scripts/spine-test.mjs` is the netcode and disguise acceptance test. Two real clients, one party. It asserts the usual netcode things — shared room, visible movement, correct speed and direction, walls that stop you and doorways that don't, no escaping the house, no client teleporting itself — plus the NPCs being alive and varied, and a body carrying on under AI control after its player leaves.
 
-Worth keeping green. Between them they caught the stale-input bug and confirmed collision lands within a millimetre of where the maths says it should.
+It also guards **the disguise**, which is the part worth understanding:
+
+- body IDs are never session IDs, never say "npc", and are all the same shape
+- a body exposes only whitelisted fields — add `isSpy` to the `Person` schema and this test fails, which is the entire idea
+- a human body and an NPC body expose **the same fields**
+- there is no `players`/`npcs` split in the state to read
+
+Worth keeping green. Between them these caught the stale-input bug, a static anchor-claim set that would have leaked between concurrent games, and confirmed collision lands within a millimetre of where the maths says it should.
 
 ---
 
@@ -68,15 +79,18 @@ Worth keeping green. Between them they caught the stale-input bug and confirmed 
 client/          browser: three.js renderer, camera, input
   index.html
   src/main.ts
-  src/house.ts         builds geometry from the shared floor plan
+  src/house.ts         geometry + furniture from the shared floor plan
+  src/person.ts        procedural partygoers, and how they're animated
 server/          authoritative game server
   src/index.ts         express + colyseus + static hosting
-  src/rooms/HouseRoom.ts   movement simulation
-  src/schema/GameState.ts  what crosses the wire
+  src/rooms/HouseRoom.ts   simulation, body takeover, actions
+  src/schema/GameState.ts  what crosses the wire — read the comment
+  src/ai/npc.ts        who the guests are, and how they decide where to go
   src/world/house.ts   SHARED floor plan + collision (see below)
+  src/world/nav.ts     SHARED anchors + room graph + pathfinding
 scripts/
-  house-check.mjs  floor plan validation, no server needed
-  spine-test.mjs   two-client netcode acceptance test
+  house-check.mjs  floor plan + anchor + routing validation, no server
+  spine-test.mjs   two-client netcode and disguise acceptance test
 render.yaml      deploy blueprint
 ```
 
@@ -88,7 +102,9 @@ render.yaml      deploy blueprint
 
 It lives under `server/` so the server's `tsc` build (`rootDir: server/src`) can reach it. The client imports across the tree and Vite bundles it. Keep it free of decorators, Schema, and imports — plain data and maths, so both build systems can eat it.
 
-This matters more than it looks. By milestone 3 there's a Spy identity worth cheating for, and a client that can be trusted with positions is a client that can be trusted with everything else. Doing authority now means never retrofitting it. See SOW §7.1.
+**One `people` map, opaque IDs, and the session→body mapping stays in server memory.** This is the disguise, and it's a protocol-level concern, not a visual one. If humans lived in `state.players` and NPCs in `state.npcs`, the Detective's client could tell them apart by reading which map a body came from — the costume wouldn't matter. Same if keys were session IDs for humans and `npc-4` for the rest.
+
+The rule as this grows: **nothing that distinguishes a human body from an AI body may ever become a `@type()` field.** Not a role, not a flag, not a hint. `spine-test.mjs` enforces it with a field whitelist. See SOW §7.1.
 
 **Input goes stale after 250ms.** Clients send at 20Hz. If one goes quiet — lag spike, backgrounded tab — the server stops them rather than applying the last input forever and walking them into a wall.
 

@@ -1,6 +1,8 @@
 import { Room, Client } from "@colyseus/core";
-import { HouseState, Player } from "../schema/GameState.js";
-import { HOUSE, SPAWNS, resolveCollisions, roomAt } from "../world/house.js";
+import { HouseState, Person } from "../schema/GameState.js";
+import { Action, HOUSE, SPEED, resolveCollisions, roomAt } from "../world/house.js";
+import { ANCHORS } from "../world/nav.js";
+import { NpcBrain, randomLook, randomName } from "../ai/npc.js";
 
 interface InputMessage {
   /** Forward axis, -1..1 */
@@ -12,14 +14,13 @@ interface InputMessage {
 }
 
 interface StoredInput extends InputMessage {
-  /** When it arrived, so we can let it go stale. */
   at: number;
 }
 
-/** Metres per second. */
-export const SPEED = 4.2;
-
 const TICK_MS = 1000 / 20;
+
+/** Bodies at the party. The Spy will be one of these, not a thirteenth guest. */
+export const PARTY_SIZE = 12;
 
 /**
  * Inputs expire. Clients send at 20Hz, so anything older than this means the
@@ -29,25 +30,45 @@ const TICK_MS = 1000 / 20;
  */
 const INPUT_STALE_MS = 250;
 
+/** How close you must stand to an anchor to join in with what happens there. */
+const ACT_RANGE = 1.6;
+
 const num = (v: unknown): number => (typeof v === "number" && Number.isFinite(v) ? v : 0);
 const clamp = (v: number, lo: number, hi: number) => Math.min(hi, Math.max(lo, v));
 
+let bodyCounter = 0;
 /**
- * Server-authoritative movement.
- *
- * Clients send *intent* (which keys are down, where the camera points) and
- * never a position. The server owns every coordinate in the game. This is
- * milestone 1's real payload: doing it now means we never retrofit authority
- * later, when there is a Spy identity worth cheating for.
+ * Opaque body IDs. Deliberately uniform and meaningless: if human bodies were
+ * keyed by session ID and NPCs by "npc-4", the disguise would be readable
+ * straight off the wire.
  */
+const newBodyId = () => `b${(bodyCounter++).toString(36)}${Math.random().toString(36).slice(2, 8)}`;
+
 export class HouseRoom extends Room<HouseState> {
   maxClients = 8;
 
   private inputs = new Map<string, StoredInput>();
 
+  /** bodyId -> brain. A body with a suspended brain is being driven by a human. */
+  private brains = new Map<string, NpcBrain>();
+
+  /** Anchor claims for this party only. */
+  private claimed = new Set<string>();
+
+  // ---- PRIVATE. These two maps are the disguise. They are server memory and
+  // must never become Schema fields, or the Detective's client can read who is
+  // human straight out of the state. See SOW section 7.1.
+  private bodyOf = new Map<string, string>(); // sessionId -> bodyId
+  private driverOf = new Map<string, string>(); // bodyId -> sessionId
+
+  /** sessionId -> the action they're holding while stood at an anchor. */
+  private held = new Map<string, number>();
+
   onCreate() {
     this.setState(new HouseState());
     this.setPatchRate(50);
+
+    this.populate();
 
     this.onMessage("input", (client: Client, msg: InputMessage) => {
       // Never trust the wire: clamp the axes and drop anything non-finite.
@@ -59,30 +80,111 @@ export class HouseRoom extends Room<HouseState> {
       });
     });
 
+    // Join in with whatever happens at the nearest anchor — read the book,
+    // take a drink, look out of the window. This is the Spy's camouflage, so
+    // it has to be exactly the same set of actions the NPCs perform.
+    this.onMessage("act", (client: Client) => {
+      const body = this.bodyOf.get(client.sessionId);
+      if (!body) return;
+      const person = this.state.people.get(body);
+      if (!person) return;
+
+      if (this.held.has(client.sessionId)) {
+        this.held.delete(client.sessionId);
+        person.action = Action.IDLE;
+        return;
+      }
+
+      const anchor = this.nearestAnchor(person.x, person.z);
+      if (!anchor) return;
+
+      this.held.set(client.sessionId, anchor.action);
+      person.action = anchor.action;
+      if (anchor.faceX !== undefined && anchor.faceZ !== undefined) {
+        person.yaw = Math.atan2(anchor.faceX - person.x, anchor.faceZ - person.z);
+      }
+    });
+
     this.setSimulationInterval((deltaMs) => this.tick(deltaMs / 1000), TICK_MS);
   }
 
+  /** Fill the house with guests. */
+  private populate() {
+    const names = new Set<string>();
+    const spots = [...ANCHORS].sort(() => Math.random() - 0.5);
+
+    for (let i = 0; i < PARTY_SIZE; i++) {
+      const person = new Person();
+      const look = randomLook();
+
+      person.name = randomName(names);
+      Object.assign(person, look);
+
+      const spot = spots[i % spots.length];
+      person.x = spot.x;
+      person.z = spot.z;
+      person.action = spot.action;
+
+      const id = newBodyId();
+      this.state.people.set(id, person);
+      this.brains.set(id, new NpcBrain(id, person, this.claimed));
+    }
+
+    console.log(`[house] ${PARTY_SIZE} guests arrived`);
+  }
+
+  private nearestAnchor(x: number, z: number) {
+    let best = null;
+    let bestDist = ACT_RANGE;
+    for (const anchor of ANCHORS) {
+      const d = Math.hypot(anchor.x - x, anchor.z - z);
+      if (d < bestDist) {
+        bestDist = d;
+        best = anchor;
+      }
+    }
+    return best;
+  }
+
   onJoin(client: Client, options?: { name?: string }) {
-    const player = new Player();
+    // Take over a guest rather than adding one. This is the Spy mechanic:
+    // an existing body at the party quietly stops being driven by the AI and
+    // starts being driven by a person. Nothing about the body changes — same
+    // ID, same face, same name, same accessory.
+    const free = [...this.brains.keys()].filter((id) => !this.driverOf.has(id));
+    if (free.length === 0) {
+      throw new Error("the party is full");
+    }
 
-    const raw = typeof options?.name === "string" ? options.name.trim().slice(0, 16) : "";
-    player.name = raw || `guest-${client.sessionId.slice(0, 4)}`;
+    const bodyId = free[Math.floor(Math.random() * free.length)];
+    const person = this.state.people.get(bodyId)!;
 
-    // Everyone arrives through the front door.
-    const spawn = SPAWNS[this.state.players.size % SPAWNS.length];
-    player.x = spawn.x;
-    player.z = spawn.z;
-    player.yaw = Math.PI; // facing into the house
-    player.hue = (this.state.players.size * 67) % 360;
+    this.brains.get(bodyId)!.suspend();
+    this.bodyOf.set(client.sessionId, bodyId);
+    this.driverOf.set(bodyId, client.sessionId);
+    person.action = Action.IDLE;
 
-    this.state.players.set(client.sessionId, player);
-    console.log(`[house] ${player.name} joined (${this.state.players.size} in room ${this.roomId})`);
+    // The client is told which body is theirs, and nothing about anyone else's.
+    client.send("you", { body: bodyId, name: person.name });
+
+    console.log(
+      `[house] a player took over ${person.name} (${this.driverOf.size} human, ${
+        PARTY_SIZE - this.driverOf.size
+      } NPC)`
+    );
   }
 
   onLeave(client: Client) {
-    this.state.players.delete(client.sessionId);
+    const bodyId = this.bodyOf.get(client.sessionId);
+    if (bodyId) {
+      // The guest carries on as if nothing happened.
+      this.driverOf.delete(bodyId);
+      this.brains.get(bodyId)?.release();
+      this.bodyOf.delete(client.sessionId);
+    }
     this.inputs.delete(client.sessionId);
-    console.log(`[house] ${client.sessionId} left (${this.state.players.size} remain)`);
+    this.held.delete(client.sessionId);
+    console.log(`[house] a player left (${this.driverOf.size} human bodies remain)`);
   }
 
   onDispose() {
@@ -92,14 +194,19 @@ export class HouseRoom extends Room<HouseState> {
   private tick(dt: number) {
     const now = Date.now();
 
-    this.state.players.forEach((player, sessionId) => {
+    // ---- human-driven bodies
+    for (const [sessionId, bodyId] of this.bodyOf) {
+      const person = this.state.people.get(bodyId);
+      if (!person) continue;
+
       const input = this.inputs.get(sessionId);
-      if (!input) return;
+      if (!input) continue;
 
       // Client went quiet — stop, don't coast.
       if (now - input.at > INPUT_STALE_MS) {
         this.inputs.delete(sessionId);
-        return;
+        if (person.action === Action.WALK) person.action = Action.IDLE;
+        continue;
       }
 
       // Movement is relative to where the camera is looking. Three.js cameras
@@ -113,22 +220,31 @@ export class HouseRoom extends Room<HouseState> {
       let dz = forwardZ * input.f + rightZ * input.r;
 
       const len = Math.hypot(dx, dz);
-      if (len < 0.001) return;
+      if (len < 0.001) {
+        // Standing still: hold whatever they're pretending to do.
+        person.action = this.held.get(sessionId) ?? Action.IDLE;
+        continue;
+      }
+
+      // Moving cancels any performance.
+      this.held.delete(sessionId);
 
       // Normalise so diagonals aren't faster than the axes.
       dx = (dx / len) * SPEED * dt;
       dz = (dz / len) * SPEED * dt;
 
-      // Walls are enforced here, not on the client. The client runs the same
-      // resolveCollisions() to predict, but this call is the one that counts.
-      const solved = resolveCollisions(player.x + dx, player.z + dz);
+      // Walls are enforced here, not on the client.
+      const solved = resolveCollisions(person.x + dx, person.z + dz);
+      person.x = clamp(solved.x, HOUSE.x1, HOUSE.x2);
+      person.z = clamp(solved.z, HOUSE.z1, HOUSE.z2);
+      person.yaw = Math.atan2(dx, dz);
+      person.action = Action.WALK;
+    }
 
-      // Last-resort clamp. resolveCollisions should never let anyone out of
-      // the shell, but if it ever did, a body loose outside the house would be
-      // unreachable and unguessable.
-      player.x = clamp(solved.x, HOUSE.x1, HOUSE.x2);
-      player.z = clamp(solved.z, HOUSE.z1, HOUSE.z2);
-      player.yaw = Math.atan2(dx, dz);
-    });
+    // ---- everyone else
+    for (const [bodyId, brain] of this.brains) {
+      if (this.driverOf.has(bodyId)) continue;
+      brain.update(dt);
+    }
   }
 }
