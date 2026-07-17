@@ -66,13 +66,17 @@ export const ANCHORS: Anchor[] = [
   { id: "bal-idle-1", room: "ballroom", x: 3.5, z: 3, action: Action.IDLE },
   { id: "bal-idle-2", room: "ballroom", x: 2, z: -3, action: Action.IDLE },
 
-  // Dining — around the table
-  { id: "din-drink-1", room: "dining", x: 10, z: 2, action: Action.DRINK, faceX: 12.5, faceZ: 4 },
-  { id: "din-drink-2", room: "dining", x: 15, z: 2, action: Action.DRINK, faceX: 12.5, faceZ: 4 },
-  { id: "din-drink-3", room: "dining", x: 10, z: 6, action: Action.DRINK, faceX: 12.5, faceZ: 4 },
-  { id: "din-drink-4", room: "dining", x: 15, z: 6, action: Action.DRINK, faceX: 12.5, faceZ: 4 },
-  { id: "din-talk-1", room: "dining", x: 16.2, z: 11.5, action: Action.TALK, faceX: 17.4, faceZ: 11.5 },
-  { id: "din-talk-2", room: "dining", x: 18.6, z: 11.5, action: Action.TALK, faceX: 17.4, faceZ: 11.5 },
+  // Dining — chairs pulled up to the table, and a lounge couch by the east wall
+  { id: "din-sit-1", room: "dining", x: 9.4, z: 3, action: Action.SIT, faceX: 12.5, faceZ: 4 },
+  { id: "din-sit-2", room: "dining", x: 9.4, z: 5, action: Action.SIT, faceX: 12.5, faceZ: 4 },
+  { id: "din-sit-3", room: "dining", x: 15.6, z: 3, action: Action.SIT, faceX: 12.5, faceZ: 4 },
+  { id: "din-sit-4", room: "dining", x: 15.6, z: 5, action: Action.SIT, faceX: 12.5, faceZ: 4 },
+  { id: "din-drink-1", room: "dining", x: 12.5, z: 1.2, action: Action.DRINK, faceX: 12.5, faceZ: 4 },
+  { id: "din-drink-2", room: "dining", x: 12.5, z: 6.8, action: Action.DRINK, faceX: 12.5, faceZ: 4 },
+  { id: "din-couch-1", room: "dining", x: 18.4, z: 9, action: Action.SIT, faceX: 15, faceZ: 9 },
+  { id: "din-couch-2", room: "dining", x: 18.4, z: 11, action: Action.SIT, faceX: 15, faceZ: 11 },
+  { id: "din-talk-1", room: "dining", x: 9, z: 11.5, action: Action.TALK, faceX: 10.2, faceZ: 11.5 },
+  { id: "din-talk-2", room: "dining", x: 11.4, z: 11.5, action: Action.TALK, faceX: 10.2, faceZ: 11.5 },
 
   // Entrance Hall
   { id: "hal-idle-1", room: "hall", x: -9.5, z: 13, action: Action.IDLE },

@@ -43,6 +43,7 @@ export enum Action {
   EXAMINE = 4,
   TALK = 5,
   LOOK = 6,
+  SIT = 7,
 }
 
 /** Footprint. Everything lives inside this. */

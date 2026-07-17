@@ -18,6 +18,7 @@ const ACTION_NAME: Record<number, string> = {
   [Action.EXAMINE]: "examining",
   [Action.TALK]: "talking",
   [Action.LOOK]: "looking out",
+  [Action.SIT]: "sitting",
 };
 
 // ---------------------------------------------------------------- scene
@@ -304,7 +305,7 @@ function tick() {
     body.speed += (moved - body.speed) * Math.min(1, dt * 9);
     body.prev.copy(body.rig.group.position);
 
-    animatePerson(body.rig, body.person.action, body.speed, elapsed);
+    animatePerson(body.rig, body.person.action, body.speed, dt, elapsed);
   });
 
   // ---- third-person camera

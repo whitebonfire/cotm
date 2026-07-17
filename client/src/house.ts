@@ -152,8 +152,35 @@ export function buildFurniture(scene: THREE.Scene) {
     return mesh;
   };
 
-  // Library: shelves down the west wall
-  for (let z = -14; z <= -6; z += 2) box(wood, 0.5, 2.4, 1.8, -19.5, 1.2, z);
+  // Library: shelves down the west wall, packed with books to take down
+  const bookMat: THREE.MeshStandardMaterial[] = [];
+  for (let i = 0; i < 8; i++) {
+    bookMat.push(
+      new THREE.MeshStandardMaterial({
+        color: new THREE.Color().setHSL(Math.random(), 0.4, 0.3),
+        roughness: 0.8,
+      })
+    );
+  }
+  for (let z = -14; z <= -6; z += 2) {
+    box(wood, 0.5, 2.4, 1.8, -19.5, 1.2, z);
+    // Spines on the room-facing side, in three rows.
+    for (const shelfY of [0.55, 1.2, 1.85]) {
+      let bz = z - 0.78;
+      while (bz < z + 0.78) {
+        const w = 0.05 + Math.random() * 0.04;
+        const h = 0.28 + Math.random() * 0.12;
+        const spine = new THREE.Mesh(
+          new THREE.BoxGeometry(0.16, h, w),
+          bookMat[Math.floor(Math.random() * bookMat.length)]
+        );
+        spine.position.set(-19.18, shelfY + h / 2 - 0.02, bz + w / 2);
+        spine.castShadow = true;
+        group.add(spine);
+        bz += w + 0.012;
+      }
+    }
+  }
 
   // Study: display cases along the north wall — the jewels live here
   for (const x of [-3.5, 0, 3.5]) {
@@ -171,7 +198,7 @@ export function buildFurniture(scene: THREE.Scene) {
   // Ballroom: the bar
   box(wood, 5, 1.05, 0.8, -8.2, 0.52, -4.4);
 
-  // Dining: the long table
+  // Dining: the long table, on its legs
   box(cloth, 6.5, 0.08, 2.6, 12.5, 0.78, 4);
   for (const [x, z] of [
     [9.7, 3],
@@ -180,6 +207,60 @@ export function buildFurniture(scene: THREE.Scene) {
     [15.3, 5],
   ])
     box(dark, 0.12, 0.78, 0.12, x, 0.39, z);
+
+  // A dining chair, seat facing (faceX, faceZ). Matches the SIT anchors so a
+  // seated guest lands on the cushion rather than hovering beside it.
+  const chair = (x: number, z: number, faceX: number, faceZ: number) => {
+    const c = new THREE.Group();
+    c.position.set(x, 0, z);
+    c.rotation.y = Math.atan2(faceX - x, faceZ - z); // +z local points at the table
+    const seat = new THREE.Mesh(new THREE.BoxGeometry(0.5, 0.08, 0.5), wood);
+    seat.position.y = 0.46;
+    seat.castShadow = true;
+    seat.receiveShadow = true;
+    c.add(seat);
+    const back = new THREE.Mesh(new THREE.BoxGeometry(0.5, 0.5, 0.08), cloth);
+    back.position.set(0, 0.72, -0.24); // behind the sitter
+    back.castShadow = true;
+    c.add(back);
+    for (const [lx, lz] of [
+      [-0.21, -0.21],
+      [0.21, -0.21],
+      [-0.21, 0.21],
+      [0.21, 0.21],
+    ]) {
+      const leg = new THREE.Mesh(new THREE.BoxGeometry(0.06, 0.46, 0.06), dark);
+      leg.position.set(lx, 0.23, lz);
+      c.add(leg);
+    }
+    group.add(c);
+  };
+
+  chair(9.4, 3, 12.5, 4);
+  chair(9.4, 5, 12.5, 4);
+  chair(15.6, 3, 12.5, 4);
+  chair(15.6, 5, 12.5, 4);
+
+  // A couch against the east wall, seat facing west — the din-couch anchors sit here.
+  const couch = new THREE.Group();
+  couch.position.set(19.1, 0, 10);
+  couch.rotation.y = -Math.PI / 2; // local +z faces west, into the room
+  const cushion = new THREE.Mesh(new THREE.BoxGeometry(4, 0.35, 1.0), cloth);
+  cushion.position.set(0, 0.42, 0);
+  cushion.castShadow = true;
+  cushion.receiveShadow = true;
+  couch.add(cushion);
+  const cback = new THREE.Mesh(new THREE.BoxGeometry(4, 0.7, 0.28), cloth);
+  cback.position.set(0, 0.75, -0.42);
+  cback.castShadow = true;
+  couch.add(cback);
+  for (const ax of [-2.05, 2.05]) {
+    const arm = new THREE.Mesh(new THREE.BoxGeometry(0.28, 0.55, 1.0), cloth);
+    arm.position.set(ax, 0.5, 0);
+    arm.castShadow = true;
+    couch.add(arm);
+  }
+  group.add(couch);
 
   // Entrance Hall: a console table by the door
   box(wood, 2.2, 0.8, 0.5, 3, 0.4, 14.4);

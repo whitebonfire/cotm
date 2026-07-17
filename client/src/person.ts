@@ -28,6 +28,11 @@ export interface Look {
 
 const SKINS = [0xf1d3b6, 0xe2b48c, 0xc68a63, 0x8d5a3b, 0x5c3a25, 0x3d2517];
 
+/** Metres of travel per full leg cycle. A cycle is two steps (~0.75m each). */
+const STRIDE_METRES = 1.5;
+/** How long the reach-and-grab takes when an action begins, seconds. */
+const GRAB_TIME = 0.5;
+
 export interface PersonRig {
   group: THREE.Group;
   legL: THREE.Object3D;
@@ -36,12 +41,23 @@ export interface PersonRig {
   armR: THREE.Object3D;
   torso: THREE.Object3D;
   head: THREE.Object3D;
-  /** Whatever they're holding — book, glass, jewel. Hidden unless in use. */
-  prop: THREE.Mesh;
+  /** A book, held in the right hand. Grabbed from a shelf to read. */
+  book: THREE.Mesh;
+  /** A glass, held in the right hand. */
+  glass: THREE.Object3D;
   /** Random per body, so identical actions don't tick in lockstep. */
   phase: number;
-  /** Stooping elders lean; kept here so animation doesn't fight the base pose. */
   baseLean: number;
+
+  // ---- animation state, advanced by animatePerson each frame
+  /** Accumulated stride angle, driven by distance moved — not by the clock.
+   *  This is what stops the feet skating: a foot plants per metre, not per
+   *  second, so it stays put on the ground however fast the body travels. */
+  stride: number;
+  /** The action currently being animated, to detect changes. */
+  curAction: number;
+  /** Seconds spent in the current action, for the grab/reach-in. */
+  actionT: number;
 }
 
 function limb(color: number, w: number, h: number, d: number, pivotY: number): THREE.Group {
@@ -114,7 +130,6 @@ export function buildPerson(look: Look): PersonRig {
   skull.castShadow = true;
   head.add(skull);
 
-  // Nose, so a body's facing is readable across a room.
   const nose = new THREE.Mesh(
     new THREE.BoxGeometry(0.05, 0.05, 0.06),
     new THREE.MeshStandardMaterial({ color: skin, roughness: 0.8 })
@@ -132,7 +147,6 @@ export function buildPerson(look: Look): PersonRig {
     head.add(hair);
 
     if (look.hair >= 3) {
-      // Longer hair down the back.
       const back = new THREE.Mesh(
         new THREE.BoxGeometry(0.26, 0.22, 0.08),
         new THREE.MeshStandardMaterial({ color: hairColor, roughness: 0.9 })
@@ -162,12 +176,11 @@ export function buildPerson(look: Look): PersonRig {
 
   torso.add(head);
 
-  // ---- accessories. Some of these become Spy targets at milestone 7, so they
-  // are attached in named, findable places rather than baked into the mesh.
+  // ---- accessories. Some become Spy targets at milestone 7, so they are
+  // attached in named, findable places rather than baked into the mesh.
   const gold = new THREE.MeshStandardMaterial({ color: 0xd8b46a, roughness: 0.3, metalness: 0.7 });
 
   if (look.acc === 1) {
-    // purse, hanging from the left hand
     const purse = new THREE.Mesh(new THREE.BoxGeometry(0.14, 0.12, 0.06), new THREE.MeshStandardMaterial({ color: 0x5a2d3a, roughness: 0.6 }));
     purse.position.y = -0.62;
     purse.castShadow = true;
@@ -196,22 +209,52 @@ export function buildPerson(look: Look): PersonRig {
     torso.add(watch);
   }
 
-  // ---- held prop, shown only for the action that needs it
-  const prop = new THREE.Mesh(
-    new THREE.BoxGeometry(0.16, 0.2, 0.05),
-    new THREE.MeshStandardMaterial({ color: 0x8a2f2f, roughness: 0.7 })
+  // ---- held objects. Real things now, not a red box: a leather book and a
+  // glass, each hidden until grabbed. They live at the end of the right arm.
+  const bookColor = new THREE.Color().setHSL(Math.random(), 0.4, 0.28);
+  const book = new THREE.Mesh(
+    new THREE.BoxGeometry(0.2, 0.26, 0.05),
+    new THREE.MeshStandardMaterial({ color: bookColor, roughness: 0.7 })
   );
-  prop.position.set(0, -0.5, 0.16);
-  prop.visible = false;
-  prop.castShadow = true;
-  armR.add(prop);
+  const pages = new THREE.Mesh(
+    new THREE.BoxGeometry(0.17, 0.23, 0.052),
+    new THREE.MeshStandardMaterial({ color: 0xe8e2d0, roughness: 0.9 })
+  );
+  book.add(pages);
+  book.position.set(0, -0.52, 0.17);
+  book.castShadow = true;
+  book.visible = false;
+  armR.add(book);
 
-  // Elderly guests stoop.
+  const glass = new THREE.Group();
+  const cup = new THREE.Mesh(
+    new THREE.CylinderGeometry(0.035, 0.026, 0.11, 10),
+    new THREE.MeshStandardMaterial({ color: 0xbfe0ea, roughness: 0.12, metalness: 0.05, transparent: true, opacity: 0.5 })
+  );
+  const wine = new THREE.Mesh(
+    new THREE.CylinderGeometry(0.03, 0.022, 0.06, 10),
+    new THREE.MeshStandardMaterial({ color: 0x7a1f2b, roughness: 0.3 })
+  );
+  wine.position.y = -0.02;
+  glass.add(cup, wine);
+  glass.position.set(0, -0.6, 0.1);
+  glass.visible = false;
+  armR.add(glass);
+
   const baseLean = look.age >= 3 ? 0.17 : look.age === 2 ? 0.06 : 0;
   torso.rotation.x = baseLean;
 
-  return { group, legL, legR, armL, armR, torso, head, prop, phase: Math.random() * Math.PI * 2, baseLean };
+  return {
+    group, legL, legR, armL, armR, torso, head, book, glass,
+    phase: Math.random() * Math.PI * 2,
+    baseLean,
+    stride: 0,
+    curAction: -1,
+    actionT: 0,
+  };
 }
+
+const lerp = (a: number, b: number, t: number) => a + (b - a) * t;
 
 /**
  * Poses a body for what it's doing.
@@ -219,100 +262,122 @@ export function buildPerson(look: Look): PersonRig {
  * @param speed metres/sec, measured from actual movement rather than taken
  *   from the action — a body being dragged by prediction should still have
  *   legs that keep up with it.
+ * @param dt    seconds since last frame, used to advance distance-based stride
+ *   and the grab timer.
  */
-export function animatePerson(rig: PersonRig, action: number, speed: number, t: number) {
+export function animatePerson(rig: PersonRig, action: number, speed: number, dt: number, t: number) {
   const time = t + rig.phase;
   const walking = speed > 0.3;
 
-  // Legs and arms swing to the pace of actual movement.
-  const stride = walking ? Math.min(speed / 4.2, 1.2) : 0;
-  const swing = Math.sin(time * 9) * 0.62 * stride;
+  // Stride advances by DISTANCE, not time. One full cycle per STRIDE_METRES,
+  // so a planted foot travels with the ground and never skates.
+  rig.stride += (speed * dt * Math.PI * 2) / STRIDE_METRES;
+  const stride = walking ? Math.min(speed / 4.2, 1.15) : 0;
+  const swing = Math.sin(rig.stride) * 0.6 * stride;
+
+  // Grab timer: reset when the action changes, then count up.
+  if (action !== rig.curAction) {
+    rig.curAction = action;
+    rig.actionT = 0;
+  }
+  rig.actionT += dt;
+  const grab = Math.min(1, rig.actionT / GRAB_TIME); // 0 = just started, 1 = settled
 
   rig.legL.rotation.x = swing;
   rig.legR.rotation.x = -swing;
-  rig.group.position.y = walking ? Math.abs(Math.sin(time * 9)) * 0.045 : 0;
+  rig.legL.position.y = 0.82;
+  rig.legR.position.y = 0.82;
+  rig.group.position.y = walking ? Math.abs(Math.sin(rig.stride)) * 0.045 : 0;
 
-  let armSwing = -swing * 0.7;
+  let armLx = -swing * 0.7;
+  let armRx = swing * 0.7;
   let leanX = rig.baseLean;
-  let propVisible = false;
-  let armLx = armSwing;
-  let armRx = -armSwing;
+  let bookOn = false;
+  let glassOn = false;
 
-  switch (action) {
-    case Action.READ: {
-      // Book held up, head tipped down to it.
-      propVisible = true;
-      armLx = -1.35;
-      armRx = -1.35;
-      leanX = rig.baseLean + 0.1;
-      rig.head.rotation.x = 0.3 + Math.sin(time * 0.7) * 0.03;
-      break;
-    }
-    case Action.DRINK: {
-      // Periodic sip rather than a permanent raised glass.
-      propVisible = true;
-      const sip = Math.max(0, Math.sin(time * 0.55));
-      armRx = -0.5 - sip * 1.0;
-      armLx = -0.12;
-      rig.head.rotation.x = -sip * 0.16;
-      break;
-    }
-    case Action.EXAMINE: {
-      leanX = rig.baseLean + 0.26;
-      armRx = -1.15 + Math.sin(time * 1.3) * 0.08;
-      armLx = -0.3;
-      rig.head.rotation.x = 0.2;
-      break;
-    }
-    case Action.TALK: {
-      // Gesturing, and a head that moves while the mouth theoretically does.
-      const beat = Math.sin(time * 2.1);
-      armRx = -0.45 - Math.max(0, beat) * 0.5;
-      armLx = -0.18 + Math.sin(time * 1.7) * 0.12;
-      rig.head.rotation.y = Math.sin(time * 1.1) * 0.16;
-      rig.head.rotation.x = Math.sin(time * 2.6) * 0.05;
-      break;
-    }
-    case Action.LOOK: {
-      // Watching the city. Slow sway, hands behind the back.
-      armLx = 0.28;
-      armRx = 0.28;
-      rig.head.rotation.y = Math.sin(time * 0.4) * 0.22;
-      leanX = rig.baseLean - 0.03;
-      break;
-    }
-    case Action.IDLE:
-    default: {
-      if (!walking) {
-        // Breathing and a bit of weight-shifting, so standing still doesn't
-        // look like a freeze — which will matter enormously once interviews
-        // exist and a genuinely frozen body would be a tell.
+  if (!walking) {
+    switch (action) {
+      case Action.READ: {
+        bookOn = true;
+        // Reach out to the shelf, then settle the book in to read.
+        armLx = lerp(-1.7, -1.35, grab);
+        armRx = lerp(-1.7, -1.35, grab);
+        leanX = rig.baseLean + 0.1 * grab;
+        rig.head.rotation.x = 0.3 * grab + Math.sin(time * 0.7) * 0.03;
+        break;
+      }
+      case Action.DRINK: {
+        glassOn = true;
+        // Reach to the bar, then occasional gentle sips. Smaller amplitude than
+        // before — it was reading as a wave.
+        const sip = Math.max(0, Math.sin(time * 0.5)) * grab;
+        armRx = lerp(-1.5, -0.55 - sip * 0.6, grab);
+        armLx = -0.12;
+        rig.head.rotation.x = -sip * 0.12;
+        break;
+      }
+      case Action.EXAMINE: {
+        leanX = rig.baseLean + 0.26 * grab;
+        armRx = -1.1 + Math.sin(time * 1.3) * 0.08;
+        armLx = -0.3;
+        rig.head.rotation.x = 0.2 * grab;
+        break;
+      }
+      case Action.TALK: {
+        const beat = Math.sin(time * 2.1);
+        armRx = -0.45 - Math.max(0, beat) * 0.5;
+        armLx = -0.18 + Math.sin(time * 1.7) * 0.12;
+        rig.head.rotation.y = Math.sin(time * 1.1) * 0.16;
+        rig.head.rotation.x = Math.sin(time * 2.6) * 0.05;
+        break;
+      }
+      case Action.LOOK: {
+        armLx = 0.28;
+        armRx = 0.28;
+        rig.head.rotation.y = Math.sin(time * 0.4) * 0.22;
+        leanX = rig.baseLean - 0.03;
+        break;
+      }
+      case Action.SIT: {
+        // Sink onto the seat: hips drop, thighs go forward, back stays upright.
+        const s = grab;
+        rig.group.position.y = -0.34 * s;
+        rig.legL.rotation.x = -1.45 * s;
+        rig.legR.rotation.x = -1.45 * s;
+        // Shift the thigh pivots forward a touch so knees clear the seat edge.
+        rig.legL.position.y = 0.82 - 0.06 * s;
+        rig.legR.position.y = 0.82 - 0.06 * s;
+        armLx = -0.2 * s;
+        armRx = -0.2 * s;
+        leanX = rig.baseLean + 0.05 * s;
+        rig.head.rotation.x = 0;
+        break;
+      }
+      case Action.IDLE:
+      default: {
+        // Breathing and weight-shifting, so standing still doesn't look frozen
+        // — which matters enormously once interviews exist and a genuinely
+        // frozen body would be a tell.
         armLx = Math.sin(time * 0.9) * 0.05;
         armRx = Math.sin(time * 0.9 + 1) * 0.05;
         rig.head.rotation.y = Math.sin(time * 0.33) * 0.13;
         leanX = rig.baseLean + Math.sin(time * 1.4) * 0.012;
+        break;
       }
-      break;
     }
-  }
-
-  if (walking) {
-    rig.head.rotation.x = 0;
-    rig.head.rotation.y = 0;
-    armLx = armSwing;
-    armRx = -armSwing;
-    propVisible = false;
+  } else {
+    // Walking overrides everything.
+    rig.head.rotation.set(0, 0, 0);
     leanX = rig.baseLean + 0.06;
   }
 
   rig.armL.rotation.x = armLx;
   rig.armR.rotation.x = armRx;
   rig.torso.rotation.x = leanX;
-  rig.prop.visible = propVisible;
 
-  if (propVisible) {
-    // Book vs glass — same slot, different object.
-    const isBook = action === Action.READ;
-    rig.prop.scale.set(isBook ? 1 : 0.4, isBook ? 1 : 0.5, isBook ? 1 : 0.4);
-  }
+  // Objects ease in as they're grabbed, instead of teleporting into the hand.
+  rig.book.visible = bookOn;
+  rig.glass.visible = glassOn;
+  if (bookOn) rig.book.scale.setScalar(grab);
+  if (glassOn) rig.glass.scale.setScalar(grab);
 }

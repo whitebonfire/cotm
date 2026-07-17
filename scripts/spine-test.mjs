@@ -134,6 +134,29 @@ check(
   `at (${parked.x.toFixed(2)}, ${parked.z.toFixed(2)}) from wherever their guest was standing`
 );
 
+// ---- the Spy's camouflage actions: a player can do what the NPCs do.
+// Reading requires a bookshelf; sitting requires a seat. Prove both from the
+// same body a human is driving.
+const ACT = { READ: 2, SIT: 7 };
+const actHere = async () => {
+  a.room.send("act");
+  await sleep(300);
+  return body().action;
+};
+
+await navigateTo(-17.6, -13); // a library shelf (a READ anchor)
+const readAction = await actHere();
+check("a player can take a book from the shelf and read", readAction === ACT.READ, `action=${readAction} (want ${ACT.READ})`);
+await actHere(); // stand back up
+
+await navigateTo(18.4, 9); // the dining couch (a SIT anchor)
+const sitAction = await actHere();
+check("a player can sit down on the furniture", sitAction === ACT.SIT, `action=${sitAction} (want ${ACT.SIT})`);
+await actHere(); // stand back up
+
+// Back to a clear stretch for the movement/speed/wall tests below: the
+// Ballroom west side, with the x=6 wall a clear 12m east and no door on that line.
+await navigateTo(-6, 3);
 const start = { x: body().x, z: body().z };
 const t0 = Date.now();
 for (let i = 0; i < 30; i++) {

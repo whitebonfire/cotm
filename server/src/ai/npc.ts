@@ -42,6 +42,8 @@ const DWELL: Record<number, [number, number]> = {
   [Action.EXAMINE]: [12, 26],
   [Action.TALK]: [16, 38],
   [Action.LOOK]: [12, 30],
+  // People settle in when they sit down.
+  [Action.SIT]: [22, 55],
 };
 
 export interface NpcLook {
