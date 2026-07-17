@@ -1,0 +1,24 @@
+{
+  "compilerOptions": {
+    "target": "ES2022",
+    "module": "NodeNext",
+    "moduleResolution": "NodeNext",
+    "lib": ["ES2022"],
+    "strict": true,
+    "skipLibCheck": true,
+    "esModuleInterop": true,
+    "forceConsistentCasingInFileNames": true,
+
+    // Colyseus schema uses legacy property decorators. Both of these are
+    // required: with useDefineForClassFields on (the ES2022 default), class
+    // field initialisers overwrite the property descriptors @type() installs
+    // and every field silently stops syncing.
+    "experimentalDecorators": true,
+    "useDefineForClassFields": false,
+
+    "rootDir": "server/src",
+    "outDir": "dist/server",
+    "sourceMap": true
+  },
+  "include": ["server/src"]
+}

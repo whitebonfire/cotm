@@ -1,0 +1,19 @@
+# Render blueprint — https://render.com/docs/blueprint-spec
+#
+# One web service serves both the client bundle and the WebSocket game server.
+# It must be a Web Service, not a Static Site: Colyseus needs a long-lived
+# process holding open sockets, which serverless cannot do.
+services:
+  - type: web
+    name: cotm
+    runtime: node
+    plan: free
+    region: oregon
+    buildCommand: npm ci && npm run build
+    startCommand: npm start
+    healthCheckPath: /health
+    envVars:
+      - key: NODE_VERSION
+        value: "22"
+      - key: NODE_ENV
+        value: production

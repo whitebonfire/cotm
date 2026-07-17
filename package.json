@@ -1,0 +1,39 @@
+{
+  "name": "cotm",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Clues of the Mind - browser detective game",
+  "type": "module",
+  "scripts": {
+    "dev": "concurrently -n server,client -c blue,magenta \"npm:dev:server\" \"npm:dev:client\"",
+    "dev:server": "tsx watch server/src/index.ts",
+    "dev:client": "vite",
+    "build": "npm run build:client && npm run build:server",
+    "build:client": "vite build",
+    "build:server": "tsc -p tsconfig.server.json",
+    "start": "node dist/server/index.js",
+    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "test:spine": "node scripts/spine-test.mjs"
+  },
+  "engines": {
+    "node": ">=22"
+  },
+  "dependencies": {
+    "@colyseus/core": "0.16.24",
+    "@colyseus/schema": "3.0.76",
+    "@colyseus/ws-transport": "0.16.5",
+    "colyseus": "0.16.5",
+    "colyseus.js": "0.16.22",
+    "express": "4.21.2",
+    "three": "0.185.1"
+  },
+  "devDependencies": {
+    "@types/express": "^4.17.21",
+    "@types/node": "^22.10.2",
+    "@types/three": "^0.185.0",
+    "concurrently": "^9.1.0",
+    "tsx": "^4.19.2",
+    "typescript": "^5.7.2",
+    "vite": "^8.1.5"
+  }
+}

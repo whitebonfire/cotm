@@ -1,0 +1,23 @@
+{
+  "compilerOptions": {
+    "target": "ES2022",
+    "module": "ESNext",
+    "moduleResolution": "bundler",
+    "lib": ["ES2022", "DOM", "DOM.Iterable"],
+    "strict": true,
+    "noEmit": true,
+    "skipLibCheck": true,
+    "esModuleInterop": true,
+    "resolveJsonModule": true,
+    "isolatedModules": true,
+    "verbatimModuleSyntax": false,
+    "forceConsistentCasingInFileNames": true,
+
+    // The client imports the server's Schema classes as *types only*, so no
+    // decorator ever reaches the browser bundle. This is here purely so
+    // type-checking that file doesn't trip over @type().
+    "experimentalDecorators": true,
+    "types": ["node", "vite/client"]
+  },
+  "include": ["client/src", "server/src", "vite.config.ts"]
+}
