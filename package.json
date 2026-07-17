@@ -13,7 +13,8 @@
     "build:server": "tsc -p tsconfig.server.json",
     "start": "node dist/server/index.js",
     "typecheck": "tsc --noEmit -p tsconfig.json",
-    "test:spine": "node scripts/spine-test.mjs"
+    "test:spine": "node scripts/spine-test.mjs",
+    "test:house": "npm run build:server && node scripts/house-check.mjs"
   },
   "engines": {
     "node": ">=22"

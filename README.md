@@ -4,7 +4,24 @@ A browser-based 3D detective game. One Detective, one Spy, twelve AI partygoers,
 
 See [SOW.md](./SOW.md) for the design. This README is about running the thing.
 
-**Current state: milestone 1 — foundations.** A grey room you can walk around in with a friend. No house, no NPCs, no roles. The point is the spine, not the game.
+**Current state: milestone 2 — the house.** Seven lit rooms you can walk around with a friend, with walls the server enforces. No NPCs, no roles, no abilities yet.
+
+```
+        -20        -6    0    6              20
+   -15   ┌───────────────┬─────┬──────────────┐
+         │   LIBRARY     │STUDY│   KITCHEN    │
+    -5   ├────┬──────────┴──┬──┴──────────────┤
+         │    │             │                 │
+         │CON-│  BALLROOM   │                 │
+     5   │SER-├─────┬───────┤     DINING      │
+         │VAT-│     │       │                 │
+         │ORY │ ENTRANCE    │                 │
+    15   └────┴─────────────┴─────────────────┘
+
+   gaps in the lines are doorways · you spawn in the Entrance Hall
+```
+
+Every room has at least two ways out — the Ballroom has four. That's deliberate: a Spy needs to leave by a door they didn't come in by, and a Detective needs to be losable. `npm run test:house` enforces it.
 
 ---
 
@@ -31,13 +48,17 @@ Everything is served from <http://localhost:2567> — one process, one port, exa
 ## Test
 
 ```bash
-npm start &          # the test needs a server
+npm run test:house   # geometry only, no server needed
+
+npm start &          # this one needs a server
 npm run test:spine
 ```
 
-`scripts/spine-test.mjs` is milestone 1's acceptance criteria as code. It connects two real clients and asserts they share a room, see each other move, that movement speed and direction are right, that walls hold, that leaving cleans up — and that the server ignores a client trying to teleport itself.
+`scripts/house-check.mjs` validates the floor plan itself: flood-fills the house from the front door and asserts every room is reachable, every room has two or more exits, no pocket of floor is walled off, and no spawn point sits inside a wall.
 
-Worth keeping green. It caught the stale-input bug during the build.
+`scripts/spine-test.mjs` is the netcode acceptance test. It connects two real clients and asserts they share a room, see each other move, that speed and direction are right, that walls stop you and doorways don't, that nobody can escape the house, that leaving cleans up — and that the server ignores a client trying to teleport itself.
+
+Worth keeping green. Between them they caught the stale-input bug and confirmed collision lands within a millimetre of where the maths says it should.
 
 ---
 
@@ -47,18 +68,25 @@ Worth keeping green. It caught the stale-input bug during the build.
 client/          browser: three.js renderer, camera, input
   index.html
   src/main.ts
+  src/house.ts         builds geometry from the shared floor plan
 server/          authoritative game server
   src/index.ts         express + colyseus + static hosting
   src/rooms/HouseRoom.ts   movement simulation
   src/schema/GameState.ts  what crosses the wire
+  src/world/house.ts   SHARED floor plan + collision (see below)
 scripts/
-  spine-test.mjs   two-client acceptance test
+  house-check.mjs  floor plan validation, no server needed
+  spine-test.mjs   two-client netcode acceptance test
 render.yaml      deploy blueprint
 ```
 
 ## Architecture notes
 
 **The server owns every position.** Clients send *intent* — which keys are down, where the camera points — and never a coordinate. The client predicts locally so movement feels instant, then eases toward whatever the server says. `HouseRoom.tick()` is the only code in the project allowed to decide where a body is.
+
+**`server/src/world/house.ts` is shared code.** The server imports it to collide; the client imports the same file to render and to predict. This is not tidiness — it's a requirement. If the two sides disagree about where a wall is by even a few centimetres, the client predicts through it, the server refuses, and the player rubber-bands. One definition, both consumers.
+
+It lives under `server/` so the server's `tsc` build (`rootDir: server/src`) can reach it. The client imports across the tree and Vite bundles it. Keep it free of decorators, Schema, and imports — plain data and maths, so both build systems can eat it.
 
 This matters more than it looks. By milestone 3 there's a Spy identity worth cheating for, and a client that can be trusted with positions is a client that can be trusted with everything else. Doing authority now means never retrofitting it. See SOW §7.1.
 

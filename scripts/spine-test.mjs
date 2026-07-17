@@ -28,24 +28,28 @@ check("name from join options applied", aSelf?.name === "alice", `got "${aSelf?.
 const aInB = () => b.state.players.get(a.sessionId);
 const start = { x: aInB().x, z: aInB().z };
 
-// yaw 0 => forward is -Z
+// Alice spawns at (-8, 12) in the Entrance Hall. yaw -PI/2 => forward is +X,
+// which is ~14m of clear floor before the wall at x=6. Chosen deliberately:
+// a route with no doorway on it, so the walk tests movement and not geometry.
+const EAST = -Math.PI / 2;
+
 const t0 = Date.now();
 for (let i = 0; i < 30; i++) {
-  a.send("input", { f: 1, r: 0, yaw: 0 });
+  a.send("input", { f: 1, r: 0, yaw: EAST });
   await sleep(50);
 }
 // Stop deliberately. Measure the walk against real elapsed time, not the time
 // the sleeps were supposed to take.
 const held = (Date.now() - t0) / 1000;
-a.send("input", { f: 0, r: 0, yaw: 0 });
+a.send("input", { f: 0, r: 0, yaw: EAST });
 await sleep(400);
 
 const end = { x: aInB().x, z: aInB().z };
 const moved = Math.hypot(end.x - start.x, end.z - start.z);
 
 check("bob sees alice move", moved > 1, `moved ${moved.toFixed(2)}m`);
-check("forward at yaw 0 goes -Z", end.z < start.z - 1, `z ${start.z.toFixed(2)} -> ${end.z.toFixed(2)}`);
-check("no sideways drift", Math.abs(end.x - start.x) < 0.01, `dx ${(end.x - start.x).toFixed(4)}`);
+check("forward at yaw -PI/2 goes +X", end.x > start.x + 1, `x ${start.x.toFixed(2)} -> ${end.x.toFixed(2)}`);
+check("no sideways drift", Math.abs(end.z - start.z) < 0.01, `dz ${(end.z - start.z).toFixed(4)}`);
 
 // 5. speed is sane. One tick of slop either side of the held window.
 const speed = moved / held;
@@ -54,7 +58,7 @@ check("speed within tolerance of 4.2 m/s", speed > 3.8 && speed < 4.6, `${speed.
 // 5b. a client that goes silent mid-stride must STOP, not coast into a wall.
 const silentStart = { x: aInB().x, z: aInB().z };
 for (let i = 0; i < 6; i++) {
-  a.send("input", { f: 1, r: 0, yaw: 0 });
+  a.send("input", { f: 1, r: 0, yaw: EAST });
   await sleep(50);
 }
 const atSilence = { x: aInB().x, z: aInB().z };
@@ -80,9 +84,9 @@ check("idle player does not drift", Math.hypot(bSelf.x - bStart.x, bSelf.z - bSt
 
 // 7. SERVER AUTHORITY: a malicious client cannot set its own position.
 const before = { x: aInB().x, z: aInB().z };
-a.send("input", { f: 0, r: 0, yaw: 0, x: 999, z: 999 });        // extra fields
-a.send("input", { f: 99, r: 0, yaw: 0 });                        // out-of-range axis
-a.send("input", { f: NaN, r: Infinity, yaw: NaN });               // garbage
+a.send("input", { f: 0, r: 0, yaw: EAST, x: 999, z: 999 });      // extra fields
+a.send("input", { f: 99, r: 0, yaw: EAST });                     // out-of-range axis
+a.send("input", { f: NaN, r: Infinity, yaw: NaN });              // garbage
 await sleep(500);
 const after = aInB();
 check("teleport fields in input are ignored", Math.hypot(after.x - 999, after.z - 999) > 100);
@@ -92,16 +96,65 @@ check("state stays finite after NaN/Infinity input", Number.isFinite(after.x) &&
 const cheatDist = Math.hypot(after.x - before.x, after.z - before.z);
 check("out-of-range axis is clamped", cheatDist < 4, `moved ${cheatDist.toFixed(2)}m in 0.5s`);
 
-// 8. bounds hold
-for (let i = 0; i < 140; i++) {
-  a.send("input", { f: 1, r: 0, yaw: 0 });
-  await sleep(20);
-}
-await sleep(400);
-const walled = aInB();
-check("player cannot leave the room", walled.z >= -19.001, `z=${walled.z.toFixed(3)}`);
+// 8. THE HOUSE: walls stop you.
+// Alice is at z=12 in the Entrance Hall. The wall at x=6 has doors at z=0 and
+// z=10 — neither is anywhere near z=12, so walking east must stop her dead at
+// the wall face: x = 6 - (PLAYER_RADIUS 0.42 + WALL_THICKNESS/2 0.15) = 5.43.
+const walk = async (yaw, ms) => {
+  const until = Date.now() + ms;
+  while (Date.now() < until) {
+    a.send("input", { f: 1, r: 0, yaw });
+    await sleep(40);
+  }
+  a.send("input", { f: 0, r: 0, yaw });
+  await sleep(300);
+};
 
-// 9. leaving removes you from everyone else's state
+await walk(EAST, 4000);
+const walled = aInB();
+check("wall stops the player", walled.x < 5.6 && walled.x > 5.2, `x=${walled.x.toFixed(3)} (expected ~5.43)`);
+check("wall did not shove them off-axis", Math.abs(walled.z - 12) < 0.2, `z=${walled.z.toFixed(3)}`);
+
+// 9. doors let you through. Walk back west to the x=-12 wall, which HAS a door
+// at z=10 — but alice is at z=12, so she should be stopped, not pass through.
+await walk(Math.PI / 2, 5000); // west
+const west = aInB();
+check("stopped by west wall away from its door", west.x > -11.6, `x=${west.x.toFixed(3)} (expected ~-11.43)`);
+
+// Now line up with the doorway at z=10 and go through into the Conservatory.
+// Steer by actual position rather than by timing — walking for a fixed
+// duration and hoping you stopped in the right place is how you end up
+// testing your own arithmetic instead of the game.
+const steerTo = async (tx, tz, maxMs = 8000) => {
+  const until = Date.now() + maxMs;
+  while (Date.now() < until) {
+    const p = aInB();
+    const dx = tx - p.x;
+    const dz = tz - p.z;
+    if (Math.hypot(dx, dz) < 0.3) break;
+    // forward = (-sin yaw, -cos yaw), so aim it down (dx, dz)
+    a.send("input", { f: 1, r: 0, yaw: Math.atan2(-dx, -dz) });
+    await sleep(40);
+  }
+  a.send("input", { f: 0, r: 0, yaw: 0 });
+  await sleep(250);
+};
+
+await steerTo(-11.2, 10); // stand in front of the opening
+const lined = aInB();
+check("can line up with a doorway", Math.abs(lined.z - 10) < 0.5, `z=${lined.z.toFixed(2)}`);
+
+await walk(Math.PI / 2, 2500); // west, through the door
+const through = aInB();
+check("player fits through a doorway", through.x < -12.5, `x=${through.x.toFixed(3)} (through = past -12)`);
+
+// 10. nobody escapes the shell, however hard they push.
+for (const yaw of [0, Math.PI / 2, Math.PI, -Math.PI / 2]) await walk(yaw, 2600);
+const loose = aInB();
+const inside = loose.x > -20 && loose.x < 20 && loose.z > -15 && loose.z < 15;
+check("player cannot escape the house", inside, `at (${loose.x.toFixed(2)}, ${loose.z.toFixed(2)})`);
+
+// 11. leaving removes you from everyone else's state
 await a.leave();
 await sleep(600);
 check("bob sees alice disappear on leave", b.state.players.size === 1, `${b.state.players.size} left`);

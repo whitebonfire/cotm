@@ -1,5 +1,6 @@
 import { Room, Client } from "@colyseus/core";
 import { HouseState, Player } from "../schema/GameState.js";
+import { HOUSE, SPAWNS, resolveCollisions, roomAt } from "../world/house.js";
 
 interface InputMessage {
   /** Forward axis, -1..1 */
@@ -17,8 +18,6 @@ interface StoredInput extends InputMessage {
 
 /** Metres per second. */
 export const SPEED = 4.2;
-/** Half-extent of the milestone 1 room. */
-export const BOUND = 19;
 
 const TICK_MS = 1000 / 20;
 
@@ -69,11 +68,11 @@ export class HouseRoom extends Room<HouseState> {
     const raw = typeof options?.name === "string" ? options.name.trim().slice(0, 16) : "";
     player.name = raw || `guest-${client.sessionId.slice(0, 4)}`;
 
-    // Spread arrivals around the middle of the room.
-    const angle = this.state.players.size * 1.7;
-    player.x = Math.cos(angle) * 3;
-    player.z = Math.sin(angle) * 3;
-    player.yaw = 0;
+    // Everyone arrives through the front door.
+    const spawn = SPAWNS[this.state.players.size % SPAWNS.length];
+    player.x = spawn.x;
+    player.z = spawn.z;
+    player.yaw = Math.PI; // facing into the house
     player.hue = (this.state.players.size * 67) % 360;
 
     this.state.players.set(client.sessionId, player);
@@ -120,8 +119,15 @@ export class HouseRoom extends Room<HouseState> {
       dx = (dx / len) * SPEED * dt;
       dz = (dz / len) * SPEED * dt;
 
-      player.x = clamp(player.x + dx, -BOUND, BOUND);
-      player.z = clamp(player.z + dz, -BOUND, BOUND);
+      // Walls are enforced here, not on the client. The client runs the same
+      // resolveCollisions() to predict, but this call is the one that counts.
+      const solved = resolveCollisions(player.x + dx, player.z + dz);
+
+      // Last-resort clamp. resolveCollisions should never let anyone out of
+      // the shell, but if it ever did, a body loose outside the house would be
+      // unreachable and unguessable.
+      player.x = clamp(solved.x, HOUSE.x1, HOUSE.x2);
+      player.z = clamp(solved.z, HOUSE.z1, HOUSE.z2);
       player.yaw = Math.atan2(dx, dz);
     });
   }
