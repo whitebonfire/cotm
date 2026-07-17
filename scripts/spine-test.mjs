@@ -194,26 +194,44 @@ check(
 );
 
 // ---- the NPCs are actually alive
+//
+// Sampled over a long window, not a snapshot. Dwells run 16-40s for reading
+// and talking, so a short window can legitimately catch every guest mid-dwell
+// and conclude the AI is dead. Poll until there's evidence instead.
 const others = keys.filter((k) => k !== a.me.body && k !== b.me.body);
 const snapshot = others.map((k) => {
   const p = a.room.state.people.get(k);
-  return { k, x: p.x, z: p.z, action: p.action };
+  return { k, x: p.x, z: p.z };
 });
-await sleep(4000);
-const stirred = snapshot.filter((s) => {
-  const p = a.room.state.people.get(s.k);
-  return Math.hypot(p.x - s.x, p.z - s.z) > 0.5;
-});
-check("NPCs move by themselves", stirred.length > 0, `${stirred.length}/${others.length} moved in 4s`);
 
-const actions = new Set(others.map((k) => a.room.state.people.get(k).action));
-check("NPCs do more than one thing", actions.size > 1, `actions seen: ${[...actions].sort().join(",")}`);
+const stirred = new Set();
+const actionsSeen = new Set();
+const stationarySamples = [];
+const watchUntil = Date.now() + 24000;
 
-const stationary = others.filter((k) => a.room.state.people.get(k).action !== 1);
+while (Date.now() < watchUntil) {
+  await sleep(250);
+  let stationaryNow = 0;
+  for (const s of snapshot) {
+    const p = a.room.state.people.get(s.k);
+    if (!p) continue;
+    actionsSeen.add(p.action);
+    if (p.action !== 1) stationaryNow++;
+    if (Math.hypot(p.x - s.x, p.z - s.z) > 0.5) stirred.add(s.k);
+  }
+  stationarySamples.push(stationaryNow / others.length);
+  // Enough evidence — stop early rather than burn the full window.
+  if (stirred.size >= 3 && actionsSeen.size > 1 && stationarySamples.length > 40) break;
+}
+
+check("NPCs move by themselves", stirred.size > 0, `${stirred.size}/${others.length} left their spot`);
+check("NPCs do more than one thing", actionsSeen.size > 1, `actions seen: ${[...actionsSeen].sort().join(",")}`);
+
+const avgStationary = stationarySamples.reduce((a, b) => a + b, 0) / stationarySamples.length;
 check(
   "most guests are standing still doing something, not all in transit",
-  stationary.length >= others.length / 2,
-  `${stationary.length}/${others.length} stationary`
+  avgStationary >= 0.5,
+  `${(avgStationary * 100).toFixed(0)}% stationary on average over ${stationarySamples.length} samples`
 );
 
 // ---- leaving hands the body back to the AI
