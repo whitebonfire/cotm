@@ -38,14 +38,19 @@ export interface RosterEntry {
   hairHue: number;
 }
 
+interface ChatMsg {
+  from: "detective" | "guest";
+  text: string;
+}
+
 interface InterviewView {
-  status: "idle" | "waiting" | "answer";
+  status: "idle" | "chat";
   target?: string;
   name?: string;
   expression?: Expression;
-  text?: string;
-  /** When the wait began, for the blank-panel countdown. */
-  started?: number;
+  messages: ChatMsg[];
+  /** The guest is composing a reply — show a "…" bubble. */
+  typing: boolean;
 }
 
 export class Tablet {
@@ -62,13 +67,13 @@ export class Tablet {
   private roster: RosterEntry[] = [];
   private myId = "";
 
-  /** The interview window in ms — matches the server, for the countdown. */
-  interviewMs = 40000;
-  private interview: InterviewView = { status: "idle" };
+  private interview: InterviewView = { status: "idle", messages: [], typing: false };
   private denied = "";
-  /** Set by main: called with a body id when the Detective picks someone. */
+  /** Set by main. onInterview opens a chat with a guest; onAsk sends a typed
+   *  question; onCloseInterview ends the chat. */
   onInterview: ((id: string) => void) | null = null;
-  private countdownTimer: ReturnType<typeof setInterval> | null = null;
+  onAsk: ((text: string) => void) | null = null;
+  onCloseInterview: (() => void) | null = null;
 
   constructor(scene: THREE.Scene) {
     this.feedCam = new THREE.PerspectiveCamera(64, 1, 0.1, 260);
@@ -126,35 +131,40 @@ export class Tablet {
     if (this.up && this.panel !== CAMERA_PANEL) this.render();
   }
 
-  // ---- interview (SOW §5)
+  // ---- interview (SOW §5): a live chat
 
-  /** True while a question is out — used to gate a second interview. */
   get interviewing(): boolean {
     return this.interview.status !== "idle";
   }
 
-  interviewStarted(target: string, name: string) {
-    this.interview = { status: "waiting", target, name, started: Date.now() };
+  /** The chat opened — show an empty thread with this guest. */
+  interviewOpen(target: string, name: string) {
+    this.interview = { status: "chat", target, name, messages: [], typing: false };
     this.denied = "";
-    // Tick the blank-panel countdown once a second while it's showing.
-    if (this.countdownTimer) clearInterval(this.countdownTimer);
-    this.countdownTimer = setInterval(() => {
-      if (this.up && this.panel === INTERVIEW_PANEL && this.interview.status === "waiting") this.render();
-    }, 1000);
+    this.render();
+    this.focusInput();
+  }
+
+  /** Locally echo the Detective's own question, then show the guest "typing". */
+  interviewAsked(text: string) {
+    if (this.interview.status !== "chat") return;
+    this.interview.messages.push({ from: "detective", text });
     this.render();
   }
 
-  interviewAnswer(msg: { target: string; name: string; expression: Expression; text: string }) {
-    if (this.countdownTimer) clearInterval(this.countdownTimer);
-    this.countdownTimer = null;
-    this.interview = {
-      status: "answer",
-      target: msg.target,
-      name: msg.name,
-      expression: msg.expression,
-      text: msg.text,
-    };
+  interviewTyping() {
+    if (this.interview.status !== "chat") return;
+    this.interview.typing = true;
     this.render();
+  }
+
+  interviewMsg(msg: { name: string; text: string; expression: Expression }) {
+    if (this.interview.status !== "chat") return;
+    this.interview.typing = false;
+    this.interview.expression = msg.expression;
+    this.interview.messages.push({ from: "guest", text: msg.text });
+    this.render();
+    this.focusInput();
   }
 
   interviewDenied(reason: string) {
@@ -162,11 +172,25 @@ export class Tablet {
     this.render();
   }
 
-  private closeInterview() {
-    if (this.countdownTimer) clearInterval(this.countdownTimer);
-    this.countdownTimer = null;
-    this.interview = { status: "idle" };
+  /** Called when the chat ends (back button, or server closed it). */
+  private closeInterview(tellServer = true) {
+    this.interview = { status: "idle", messages: [], typing: false };
+    if (tellServer) this.onCloseInterview?.();
     this.render();
+  }
+
+  /** Server closed the chat from its side (e.g. it went idle). */
+  interviewClosedByServer() {
+    if (this.interview.status === "chat") this.closeInterview(false);
+  }
+
+  private focusInput() {
+    requestAnimationFrame(() => {
+      const input = this.screenEl.querySelector(".chat-input") as HTMLInputElement | null;
+      input?.focus();
+      const list = this.screenEl.querySelector(".chat-list") as HTMLElement | null;
+      if (list) list.scrollTop = list.scrollHeight;
+    });
   }
 
   // ---- DOM
@@ -193,8 +217,34 @@ export class Tablet {
         this.onInterview(ask.getAttribute("data-interview")!);
         return;
       }
+      if (el.closest("[data-send]")) {
+        this.sendQuestion();
+        return;
+      }
       if (el.closest("[data-back]")) this.closeInterview();
     });
+
+    // The chat input: Enter sends, and keys must not leak to the game/tablet
+    // (so typing a question doesn't toggle panels or lower the tablet).
+    this.screenEl.addEventListener("keydown", (ev) => {
+      const input = (ev.target as HTMLElement).closest(".chat-input");
+      if (!input) return;
+      ev.stopPropagation();
+      if (ev.key === "Enter") {
+        ev.preventDefault();
+        this.sendQuestion();
+      }
+    });
+  }
+
+  private sendQuestion() {
+    const input = this.screenEl.querySelector(".chat-input") as HTMLInputElement | null;
+    if (!input || this.interview.status !== "chat" || this.interview.typing) return;
+    const text = input.value.trim();
+    if (!text) return;
+    input.value = "";
+    this.interviewAsked(text);
+    this.onAsk?.(text);
   }
 
   private faceHtml(entry: RosterEntry | undefined, expression: Expression, size: number): string {
@@ -206,30 +256,37 @@ export class Tablet {
   }
 
   private renderInterview() {
-    // Reveal: the messenger thread with the guest's face, name and answer.
-    if (this.interview.status === "answer") {
+    // A live chat with the guest: their face and name up top, the thread of
+    // messages, and an input to type the next question.
+    if (this.interview.status === "chat") {
       const entry = this.roster.find((e) => e.id === this.interview.target);
-      const face = this.faceHtml(entry, this.interview.expression ?? "neutral", 128);
+      const face = this.faceHtml(entry, this.interview.expression ?? "neutral", 56);
+      const bubbles = this.interview.messages
+        .map((m) =>
+          m.from === "detective"
+            ? `<div class="msg me">${escapeHtml(m.text)}</div>`
+            : `<div class="msg them">${escapeHtml(m.text)}</div>`
+        )
+        .join("");
+      const typing = this.interview.typing
+        ? `<div class="msg them typing"><span></span><span></span><span></span></div>`
+        : "";
       this.screenEl.innerHTML = `
-        <div class="thread">
-          ${face}
-          <div class="who-name">${this.interview.name ?? ""}</div>
-          <div class="bubble">${escapeHtml(this.interview.text ?? "")}</div>
-          <button data-back>← back to the guests</button>
-        </div>`;
-      return;
-    }
-
-    // Blank panel while the answer is written (SOW §4): a face-down thread and a
-    // countdown, nothing to read yet.
-    if (this.interview.status === "waiting") {
-      const elapsed = (Date.now() - (this.interview.started ?? Date.now())) / 1000;
-      const left = Math.max(0, Math.ceil(this.interviewMs / 1000 - elapsed));
-      this.screenEl.innerHTML = `
-        <div class="waiting">
-          <div class="qmark">?</div>
-          <div>questioning <b>${this.interview.name ?? ""}</b></div>
-          <div class="sub">their reply will come through in ${left}s</div>
+        <div class="chat">
+          <div class="chat-head">
+            ${face}
+            <div class="chat-who">${escapeHtml(this.interview.name ?? "")}</div>
+            <button class="chat-back" data-back>× end</button>
+          </div>
+          <div class="chat-list">${bubbles}${typing}
+            ${this.interview.messages.length === 0 && !this.interview.typing
+              ? `<div class="chat-empty">Ask them anything. Read how they answer.</div>`
+              : ""}
+          </div>
+          <div class="chat-compose">
+            <input class="chat-input" type="text" placeholder="type a question…" maxlength="320" ${this.interview.typing ? "disabled" : ""} />
+            <button class="chat-send" data-send ${this.interview.typing ? "disabled" : ""}>ask</button>
+          </div>
         </div>`;
       return;
     }

@@ -234,3 +234,76 @@ export function authoredAnswer(name: string, persona: Persona, host: string): st
 /** Rough character cap — the Spy's answer is capped to about this, so a wall of
  *  text can't itself become the tell. */
 export const ANSWER_CAP = 320;
+
+/**
+ * Authored reply to an ARBITRARY typed question, in the guest's voice. This is
+ * the fallback when there's no API key or a live call fails — best-effort, since
+ * without the model it can't truly converse. It reads the question for a few
+ * common intents (why are you here / who are you) and otherwise deflects in
+ * voice. Live AI is what makes the conversation real; this just keeps it from
+ * ever going silent.
+ */
+export function authoredReply(name: string, persona: Persona, host: string, question: string): string {
+  const q = question.toLowerCase();
+  const tie = persona.tie;
+  const job = persona.job;
+
+  const asksWhyHere = /\b(why|what).*(here|come|party|tonight|attend)|bring you/.test(q);
+  const asksWho = /\b(who are you|your name|what.*do|your job|occupation)\b/.test(q);
+  const asksAccuse = /\b(spy|lying|lie|suspicious|hiding|hide|guilty|did you)\b/.test(q);
+
+  const pool = (): string[] => {
+    if (asksWhyHere) return WHY_HERE[persona.voice](tie, job, host);
+    if (asksWho) return WHO[persona.voice](tie, job);
+    if (asksAccuse) return ACCUSED[persona.voice]();
+    return DEFLECT[persona.voice]();
+  };
+
+  return scrub(pick(pool()));
+}
+
+type Lines = (a?: string, b?: string, c?: string) => string[];
+
+const WHY_HERE: Record<Voice, Lines> = {
+  terse: (tie) => [`${tie}. thats it`, `invited. same as anyone`],
+  rambling: (tie, job) => [`oh gosh, i'm ${tie}, we go back years, and honestly i almost didnt come but here i am, lovely house isnt it`],
+  sloppy: (tie) => [`im ${tie}. good party i guess`],
+  drunk: (tie) => [`THE HOST. love em. we go way back. ${tie} or somethin. wheres the wine`],
+  formal: (tie, job, host) => [`I am ${tie}. ${host} was kind enough to include me.`],
+  guarded: () => [`why do you ask? i was invited, same as everyone`],
+  flustered: (tie) => [`oh, i, sorry, i was invited? i'm ${tie}, yes`],
+  articulate: (tie) => [`I'm ${tie}. I came for the company more than the wine, truthfully. Though the wine is good.`],
+};
+
+const WHO: Record<Voice, Lines> = {
+  terse: (tie, job) => [`${job}. why`, `nobody important`],
+  rambling: (tie, job) => [`well i'm ${job}, have been for years, though i dabble in all sorts really, its a long story`],
+  sloppy: (tie, job) => [`im ${job}. thats about it`],
+  drunk: (tie, job) => [`im ${job}. DID you know that. bet you didnt`],
+  formal: (tie, job) => [`I am ${job}, and ${tie}.`],
+  guarded: () => [`does it matter who i am? i'm a guest`],
+  flustered: (tie, job) => [`um, i'm, sorry, i'm ${job}? i think thats, yes`],
+  articulate: (tie, job) => [`I'm ${job} by trade, though I'd rather talk about almost anything else.`],
+};
+
+const ACCUSED: Record<Voice, () => string[]> = {
+  terse: () => [`no`, `dont be daft`],
+  rambling: () => [`me? goodness no, i wouldnt even know how, i'm just here for the evening honestly, what a thing to ask`],
+  sloppy: () => [`ha. no. wrong person mate`],
+  drunk: () => [`a SPY? ME? thats the funniest thing ive heard all night. buy me a drink`],
+  formal: () => [`I beg your pardon. I am nothing of the sort.`],
+  guarded: () => [`interesting question. why would you think that`],
+  flustered: () => [`what?? no, i, why would you, oh gosh, no, i'm just a guest, sorry`],
+  articulate: () => [`No. And I'd be a fairly poor one if I were, standing here talking to you.`],
+};
+
+const DEFLECT: Record<Voice, () => string[]> = {
+  terse: () => [`cant say`, `no idea`, `hm`],
+  rambling: () => [`oh, thats a funny one, i'm not sure really, i was just thinking about something else entirely, what were we saying`],
+  sloppy: () => [`dunno really. good question tho`],
+  drunk: () => [`no idea what you mean. is there more wine going round`],
+  formal: () => [`I'm not certain I follow your meaning.`],
+  guarded: () => [`why do you want to know that`],
+  flustered: () => [`oh, um, i'm not, sorry, i dont really know what to say to that`],
+  articulate: () => [`That's a curious thing to ask. I'm not sure I have a good answer for you.`],
+};

@@ -45,6 +45,26 @@ Two things have to stay true for that to work:
 
 Get this wrong in either direction and the game breaks — too fast and the interview never happens, too slow and it doesn't matter. **This is the primary balance risk of the project.**
 
+### 2.2a The interview is now a live chat (supersedes the 40s blank panel)
+
+**Design change during build (milestone 5/6).** The interview was reworked from
+"pick a target, blank panel for 40s, one written answer" into a **live chat**:
+the Detective types real questions and the guest answers turn by turn. NPCs
+answer live via the model; a human types their own replies.
+
+This trades away the blank window's latency-hiding, so the timing tell it solved
+(§5.2) comes back — a live conversation exposes how long a reply took. It's
+handled instead by **pacing**: an NPC's reply is held back to a length-scaled,
+human-like delay that absorbs however long generation took, so answer *speed*
+can't out the AI and the Detective still has to read the writing (§5.3). A
+human's real typing time is shown the same way (a "typing" indicator). The
+per-answer character cap and the writing-voice spread are unchanged.
+
+Open questions this raises, to revisit in playtesting: whether the pacing band
+(currently ~2.5–14s) actually overlaps human typing times well enough, and
+whether an interrogated human being pinned on autopilot for the chat's duration
+(auto-released after the Detective goes idle) is the right cost.
+
 ### 2.3 No freeze — resolved
 
 Interviews do not stop the world. An interviewed NPC keeps walking, drinking, reading, and talking exactly as before. The interview is a message thread, not a conversation in the room, so there is nothing to see and nothing to leak.
@@ -66,18 +86,18 @@ Settled during the interview, listed so we can catch drift later.
 | Area | Decision |
 |---|---|
 | Players | 2 humans per round: 1 Detective, 1 Spy. Everyone else is an NPC. |
-| Role assignment | **Random each round.** The lobby role buttons are unrelated (§6.2). |
+| Role assignment | **Picked, host-first** (changed from random during build). The host chooses Detective or Spy; the other player takes what's left. |
 | Party size | ~12 NPCs across 6-8 rooms. |
 | Spy appearance | Spy **replaces** a specific NPC — that NPC is removed from the party. No doubles, no guess-menu ambiguity. Spy inherits their look, name, and accessories. |
 | Spy tasks | 3 steal-and-deliver tasks. **Silent completion** — no alert to the Detective. |
 | Guesses | 2. Wrong twice = Spy wins. |
 | Runout | **Detective wins.** The 10-minute clock is the Spy's deadline (§2.2). |
-| Interview | Tablet messenger UI. Blank panel for 40s, then face + expression + name + written explanation. |
-| Interview answers | **Live AI generation** per interview, hard timeout to authored fallback. |
+| Interview | **Live chat** on the Detective's tablet (changed from the 40s blank panel — see §2.2a). The Detective types questions; the guest answers turn by turn, with a face + expression. |
+| Interview answers | **Live AI generation** per reply, in the guest's voice, hard timeout to authored fallback; paced to a human-like delay. |
 | Roleplay | **All 12 NPCs** carry a full persona and stay in character across the whole round. |
 | Writing quality | NPCs deliberately write imperfectly, across a **spread** of voices (§5.3). |
-| Judging | Pure judgement. The Detective gets the text and nothing else. No hesitation meter, no follow-ups. |
-| Spy answer rules | Character cap matching NPC answer length, and the Spy sees the same prompt the NPCs were given. |
+| Judging | Pure judgement. The Detective reads the writing. Follow-up questions are now the whole point (live chat, §2.2a). |
+| Spy answer rules | Character cap matching NPC replies; the Spy sees the persona they're wearing so they can perform it. |
 | Freeze | **None.** Nobody stops for an interview. The Spy's body autopilots while they type (§2.3). |
 | Spy awareness | Blind to interviews of others — and with no freeze, there is nothing to leak. |
 | Accounts | Real backend from day one: sign-in, persistent username, friend codes. |

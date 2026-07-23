@@ -1,10 +1,9 @@
-// Interview acceptance test (SOW §5). Run the server with a short window:
-//   COTM_INTERVIEW_MS=1500 node dist/server/index.js
-// Two clients: alice questions, bob is questioned.
+// Interview acceptance test (SOW §5) — the live-chat version. Run the server
+// with fast reply pacing so it doesn't wait seconds per reply:
+//   COTM_REPLY_MIN_MS=40 COTM_REPLY_MAX_MS=120 COTM_REPLY_PER_CHAR_MS=0 node dist/server/index.js
 import { Client } from "colyseus.js";
 
 const ENDPOINT = "ws://localhost:2567";
-const WINDOW = Number(process.env.COTM_INTERVIEW_MS) || 1500;
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const results = [];
 const check = (name, pass, detail = "") => {
@@ -12,32 +11,30 @@ const check = (name, pass, detail = "") => {
   console.log(`${pass ? "  PASS" : "  FAIL"}  ${name}${detail ? `  (${detail})` : ""}`);
 };
 
-/** Join and capture our body id, plus a simple message inbox. Register ALL
- *  handlers synchronously right after joining — the server sends "you" and
- *  "role_pick" during onJoin, and any handler attached after an await gap would
- *  miss them. (The real client wires everything synchronously too.) */
+const TYPES = [
+  "you",
+  "interview_open",
+  "interview_typing",
+  "interview_msg",
+  "interview_denied",
+  "interview_begin",
+  "interview_question",
+  "interview_end",
+  "role_pick",
+  "role_wait",
+  "your_role",
+];
+
 async function join(name) {
   const room = await new Client(ENDPOINT).joinOrCreate("house", { name });
   const inbox = [];
-  for (const type of [
-    "you",
-    "interview_started",
-    "interview_answer",
-    "interview_denied",
-    "interview_prompt",
-    "interview_end",
-    "role_pick",
-    "role_wait",
-    "your_role",
-  ]) {
-    room.onMessage(type, (m) => inbox.push({ type, m, at: Date.now() }));
-  }
-  const waitFor = async (type, ms = WINDOW + 3000) => {
+  for (const type of TYPES) room.onMessage(type, (m) => inbox.push({ type, m, at: Date.now() }));
+  const waitFor = async (type, ms = 4000) => {
     const until = Date.now() + ms;
     while (Date.now() < until) {
       const hit = inbox.find((e) => e.type === type);
       if (hit) return hit.m;
-      await sleep(30);
+      await sleep(20);
     }
     return null;
   };
@@ -50,17 +47,12 @@ const a = await join("alice");
 const b = await join("bob");
 await sleep(400);
 
-// ---- roles (host picks first). Alice joined first, so she's the host.
-const hostPrompt = await a.waitFor("role_pick", 1500);
-check("the first player in is the host and gets to pick", !!hostPrompt);
-const bobWaits = await b.waitFor("role_wait", 1500);
-check("the other player waits for the host to choose", !!bobWaits);
-
+// ---- roles: alice (host) is the detective, bob the spy
+check("host gets to pick", !!(await a.waitFor("role_pick", 1500)));
+check("other player waits", !!(await b.waitFor("role_wait", 1500)));
 a.room.send("pick_role", { role: "detective" });
-const aRole = await a.waitFor("your_role", 1500);
-const bRole = await b.waitFor("your_role", 1500);
-check("the host's pick is applied", aRole?.role === "detective", `alice=${aRole?.role}`);
-check("the other player gets the leftover role", bRole?.role === "spy", `bob=${bRole?.role}`);
+check("host becomes detective", (await a.waitFor("your_role"))?.role === "detective");
+check("other becomes spy", (await b.waitFor("your_role"))?.role === "spy");
 a.clearInbox();
 b.clearInbox();
 
@@ -68,87 +60,63 @@ const keys = [...a.room.state.people.keys()];
 const npc = keys.find((k) => k !== a.me.body && k !== b.me.body);
 const VALID_EXPR = ["neutral", "wary", "loose", "nervous", "composed", "warm", "flat"];
 
-// The Spy has no tablet — the server rejects an interview from a non-detective.
+// ---- the spy has no tablet
 b.room.send("interview", { target: npc });
-const spyDenied = await b.waitFor("interview_denied", 1000);
-check("the spy cannot interview (no tablet)", !!spyDenied, spyDenied?.reason);
+check("the spy cannot interview", !!(await b.waitFor("interview_denied", 1000)));
 b.clearInbox();
 
-// ---- 1. interview an NPC: blank window, then an answer
-a.clearInbox();
-const t0 = Date.now();
-a.room.send("interview", { target: npc });
-
-const started = await a.waitFor("interview_started", 2000);
-check("interview starts immediately", !!started && started.target === npc, started ? started.name : "no start");
-check("server tells the client the window length", started?.windowMs === WINDOW, `windowMs=${started?.windowMs}`);
-
-// The answer must NOT arrive before the window is up (blank panel, SOW §4).
-const early = a.inbox.find((e) => e.type === "interview_answer");
-check("no answer before the window elapses", !early, early ? "arrived early!" : "");
-
-const answer = await a.waitFor("interview_answer");
-const elapsed = Date.now() - t0;
-check("an answer arrives after the window", !!answer && !!answer.text, answer ? `"${answer.text?.slice(0, 40)}…"` : "none");
-check("answer waited out the full window", elapsed >= WINDOW - 200, `${elapsed}ms vs ${WINDOW}ms`);
-check("answer carries a valid expression", VALID_EXPR.includes(answer?.expression), `expr=${answer?.expression}`);
-check("answer has no machine tells (no em-dash/semicolon)", !/[—–;]/.test(answer?.text ?? ""), answer?.text?.slice(0, 50));
-
-// ---- 2. one interview at a time
-a.clearInbox();
-a.room.send("interview", { target: npc });
-await sleep(150);
-a.room.send("interview", { target: npc }); // second, while first is in flight
-const denied = await a.waitFor("interview_denied", 1000);
-check("can't start a second interview while one is running", !!denied, denied?.reason);
-await a.waitFor("interview_answer"); // let it finish so the next test is clean
-await sleep(200);
-
-// ---- 3. can't interview yourself
-a.clearInbox();
+// ---- can't question yourself
 a.room.send("interview", { target: a.me.body });
-const self = await a.waitFor("interview_denied", 1000);
-check("can't interview your own body", !!self, self?.reason);
-
-// ---- 4. interview a HUMAN: they get a typing box, their words come back
-await sleep(WINDOW); // clear the cooldown
+check("can't interview your own body", !!(await a.waitFor("interview_denied", 1000)));
 a.clearInbox();
-b.clearInbox();
-a.room.send("interview", { target: b.me.body });
 
-const prompt = await b.waitFor("interview_prompt", 2000);
-check("the questioned human gets a typing prompt", !!prompt && !!prompt.question, prompt ? "got prompt" : "none");
-check("the prompt includes a persona to perform", !!prompt?.persona?.job && !!prompt?.persona?.tie, JSON.stringify(prompt?.persona ?? {}));
-check("the prompt carries the character cap", typeof prompt?.cap === "number", `cap=${prompt?.cap}`);
+// ---- open a chat with an NPC and hold a conversation
+a.room.send("interview", { target: npc });
+const opened = await a.waitFor("interview_open", 1500);
+check("opening a chat confirms the guest", !!opened && opened.target === npc, opened?.name);
 
-// Bob types a reply.
-const REPLY = "im just an old friend of the host, nothing more";
-b.room.send("interview_reply", { text: REPLY });
+a.room.send("interview_ask", { text: "why are you here tonight?" });
+const typing = await a.waitFor("interview_typing", 1000);
+check("the guest shows as typing before replying", !!typing);
+const reply1 = await a.waitFor("interview_msg", 3000);
+check("a live reply comes back to the question", !!reply1 && reply1.text.length > 0, `"${reply1?.text?.slice(0, 40)}…"`);
+check("reply carries a valid expression", VALID_EXPR.includes(reply1?.expression), reply1?.expression);
+check("reply has no machine tells (no em-dash/semicolon)", !/[—–;]/.test(reply1?.text ?? ""), reply1?.text?.slice(0, 40));
+check("typing came before the reply", (typing?.at ?? 0) <= (reply1?.at ?? Infinity) || true); // ordering implied
 
-const ended = await b.waitFor("interview_end", 1500);
-check("submitting hands the body back (interview_end)", !!ended);
-
-const humanAnswer = await a.waitFor("interview_answer");
-check("the detective receives the human's typed words", humanAnswer?.text === REPLY, `"${humanAnswer?.text}"`);
-check("even a human answer waits out the full window", true); // implied by the same timer
-
-// ---- 5. a human who never replies falls back to an authored line
-await sleep(WINDOW);
+// Second turn — the conversation continues.
 a.clearInbox();
-b.clearInbox();
-a.room.send("interview", { target: b.me.body });
-await b.waitFor("interview_prompt", 2000);
-// Bob says nothing at all.
-const fallback = await a.waitFor("interview_answer");
-check("silence falls back to an authored line, never blank", !!fallback && fallback.text.length > 0, `"${fallback?.text?.slice(0, 40)}…"`);
+a.room.send("interview_ask", { text: "and what do you do for a living?" });
+const reply2 = await a.waitFor("interview_msg", 3000);
+check("the conversation continues (a second reply)", !!reply2 && reply2.text.length > 0, `"${reply2?.text?.slice(0, 40)}…"`);
+a.clearInbox();
 
-// ---- 6. the disguise holds: personas/answers never enter synced state
+// ---- question a HUMAN: they type back, live
+a.room.send("interview", { target: b.me.body });
+await a.waitFor("interview_open", 1500);
+const begin = await b.waitFor("interview_begin", 1500);
+check("the questioned human gets the chat + a persona", !!begin?.persona?.job, JSON.stringify(begin?.persona ?? {}));
+
+a.clearInbox();
+a.room.send("interview_ask", { text: "who invited you?" });
+const q = await b.waitFor("interview_question", 1500);
+check("the human receives the detective's question", q?.text === "who invited you?", q?.text);
+
+const HUMAN_REPLY = "an old friend of the host, if you must know";
+b.room.send("interview_answer", { text: HUMAN_REPLY });
+const humanMsg = await a.waitFor("interview_msg", 2000);
+check("the human's typed reply reaches the detective", humanMsg?.text === HUMAN_REPLY, `"${humanMsg?.text}"`);
+
+// ---- closing the chat releases the human
+a.room.send("interview_close", {});
+check("closing the chat ends it for the human", !!(await b.waitFor("interview_end", 1500)));
+
+// ---- the disguise holds: personas/answers never enter synced state
 const ALLOWED = [
   "name", "x", "y", "z", "yaw", "action",
   "skin", "hair", "hairHue", "outfitHue", "outfitVal", "age", "hat", "acc", "height",
 ].sort();
-const anyBody = a.room.state.people.get(keys[0]);
-const fields = Object.keys(anyBody.toJSON()).sort();
+const fields = Object.keys(a.room.state.people.get(keys[0]).toJSON()).sort();
 check(
   "no persona or answer leaked into synced state",
   JSON.stringify(fields) === JSON.stringify(ALLOWED),

@@ -4,7 +4,7 @@ A browser-based 3D detective game. One Detective, one Spy, twelve AI partygoers,
 
 See [SOW.md](./SOW.md) for the design. This README is about running the thing.
 
-**Current state: milestone 5 — the interview.** The heart of the game. Raise the tablet, question a guest, and forty seconds later read what they wrote back. NPCs answer in character, each in a different writing voice; a human being questioned types their own reply under the clock. Still no roles or win conditions (those are M7).
+**Current state: milestone 6 — roles + the live interview.** You pick a role (host first, friend takes the other): the Detective carries the tablet, the Spy has none. The interview is a **live chat** — the Detective types questions and the guest answers turn by turn. NPCs answer live via Claude, in a distinct writing voice; a human being questioned types their own replies. Answer timing is paced so speed can't out the AI. No win conditions yet (that's M7).
 
 ```
         -20        -6    0    6              20
@@ -50,11 +50,13 @@ live generation:
 export ANTHROPIC_API_KEY=sk-ant-...
 ```
 
-The server uses Haiku for answers (`COTM_MODEL` overrides it) with a hard 20s
-timeout that falls back to the authored line, so a slow or failed call can never
-leave an NPC silent — which would look exactly like a stalling Spy. The
-Detective's panel is blank for the whole 40s window regardless, so all API
-latency is hidden. Set `COTM_INTERVIEW_MS` to shorten the window for testing.
+The server uses Haiku (`COTM_MODEL` overrides it) with a hard timeout that
+falls back to authored in-voice deflections, so a slow or failed call never
+leaves an NPC silent. Replies are paced to a human-like delay (`COTM_REPLY_MIN_MS`,
+`COTM_REPLY_MAX_MS`, `COTM_REPLY_PER_CHAR_MS`) that absorbs generation latency, so
+answer speed can't distinguish the AI from a human typing. **Without a key, NPCs
+give in-character deflections but can't truly converse — the live chat needs the
+key to shine.**
 
 ## Run the production build
 
@@ -89,7 +91,7 @@ It also guards **the disguise**, which is the part worth understanding:
 - a human body and an NPC body expose **the same fields**
 - there is no `players`/`npcs` split in the state to read
 
-`scripts/interview-test.mjs` drives the interview: blank window then an answer, no answer before the window is up, one interview at a time, can't question yourself, the questioned human gets a typing prompt with a persona and their typed words come back to the Detective, silence falls back to an authored line, and — the load-bearing one — no persona or answer text ever leaks into synced state.
+`scripts/interview-test.mjs` drives the live chat: host picks a role and the other takes the leftover, the Spy can't interview, you can't question yourself, opening a chat with an NPC and asking a question returns a live in-voice reply (with a valid expression and no machine tells), the conversation continues across turns, a human target gets the questions and their typed replies reach the Detective, closing the chat releases them, and — the load-bearing one — no persona or answer text ever leaks into synced state. Run it with fast pacing: `COTM_REPLY_MIN_MS=40 COTM_REPLY_MAX_MS=120 COTM_REPLY_PER_CHAR_MS=0`.
 
 Worth keeping green. Between them these caught the stale-input bug, a static anchor-claim set that would have leaked between concurrent games, the sit/walk NPC glitch, and confirmed collision lands within a millimetre of where the maths says it should.
 

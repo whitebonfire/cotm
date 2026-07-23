@@ -6,31 +6,41 @@ import { NpcBrain, randomLook, randomName } from "../ai/npc.js";
 import {
   assignVoices,
   generatePersona,
-  authoredAnswer,
+  authoredReply,
   expressionFor,
   scrub,
-  QUESTION,
   ANSWER_CAP,
   HOSTS,
   type Persona,
 } from "../ai/persona.js";
-import { liveAnswer } from "../ai/llm.js";
+import { liveReply, type ChatTurn } from "../ai/llm.js";
 
-/** The interview window: blank panel for this long, then the answer (SOW §4). */
-const INTERVIEW_MS = Number(process.env.COTM_INTERVIEW_MS) || 40000;
-/** A Detective can't start another interview until this long after the last one
- *  began — so the moment the answer lands, they may ask again. */
-const INTERVIEW_COOLDOWN_MS = INTERVIEW_MS;
+/**
+ * Response pacing (SOW §5.2/§5.3). An NPC's reply is held back so it appears
+ * after a human-like "typing" delay — long enough that answer SPEED can't out
+ * the AI, forcing the Detective to read the writing itself. The delay absorbs
+ * however long generation actually took, so a fast call and a slow one feel the
+ * same. Scaled to the reply's length, like a real typist.
+ */
+const REPLY_MIN_MS = Number(process.env.COTM_REPLY_MIN_MS) || 2500;
+const REPLY_MAX_MS = Number(process.env.COTM_REPLY_MAX_MS) || 14000;
+const REPLY_PER_CHAR_MS = process.env.COTM_REPLY_PER_CHAR_MS ? Number(process.env.COTM_REPLY_PER_CHAR_MS) : 55;
+
+/** Auto-close an interview the Detective has gone quiet on, so a human target
+ *  isn't pinned in the chat (and on autopilot) forever. */
+const INTERVIEW_IDLE_MS = 30000;
 
 interface Interview {
   detective: string; // sessionId asking
-  target: string; // bodyId being asked
-  startedAt: number;
-  /** Resolved answer, or null until the NPC/AI or the human produces one. */
-  answer: string | null;
-  /** sessionId of the human being interviewed, if the target is a person. */
-  humanTarget: string | null;
+  target: string; // bodyId being questioned
+  humanTarget: string | null; // sessionId if the target is a person
+  history: ChatTurn[]; // the conversation so far
+  busy: boolean; // a reply is pending (NPC generating, or human typing)
+  lastActivity: number;
 }
+
+const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
+const clampMs = (v: number) => Math.min(REPLY_MAX_MS, Math.max(REPLY_MIN_MS, v));
 
 interface InputMessage {
   /** Forward axis, -1..1 */
@@ -101,11 +111,9 @@ export class HouseRoom extends Room<HouseState> {
   // ---- interviews (SOW §5). Personas are server memory only — never Schema.
   private personas = new Map<string, Persona>(); // bodyId -> who they are
   private host = HOSTS[0];
-  /** One interview in flight per Detective. */
+  /** One open chat per Detective. */
   private interviews = new Map<string, Interview>(); // detective sessionId -> interview
-  /** When each Detective last began an interview, for the cooldown. */
-  private lastInterview = new Map<string, number>();
-  /** Bodies currently on autopilot because their human is typing an answer. */
+  /** Bodies currently on autopilot because their human is being questioned. */
   private autopilot = new Set<string>(); // bodyId
 
   onCreate() {
@@ -169,41 +177,36 @@ export class HouseRoom extends Room<HouseState> {
       if (waiting) this.grantRole(waiting.sessionId, other);
     });
 
-    // ---- interviews (SOW §5)
+    // ---- interviews (SOW §5): a live chat the Detective drives by typing.
     this.onMessage("interview", (client: Client, msg: { target?: string }) => {
-      this.startInterview(client, typeof msg?.target === "string" ? msg.target : "");
+      this.openInterview(client, typeof msg?.target === "string" ? msg.target : "");
     });
-
-    // The human being interviewed submits their typed answer.
-    this.onMessage("interview_reply", (client: Client, msg: { text?: string }) => {
-      this.receiveReply(client, typeof msg?.text === "string" ? msg.text : "");
+    this.onMessage("interview_ask", (client: Client, msg: { text?: string }) => {
+      this.askQuestion(client, typeof msg?.text === "string" ? msg.text : "");
+    });
+    this.onMessage("interview_answer", (client: Client, msg: { text?: string }) => {
+      this.humanReply(client, typeof msg?.text === "string" ? msg.text : "");
+    });
+    this.onMessage("interview_close", (client: Client) => {
+      this.closeInterview(client.sessionId);
     });
 
     this.setSimulationInterval((deltaMs) => this.tick(deltaMs / 1000), TICK_MS);
   }
 
   // ---------------------------------------------------------------- interviews
+  //
+  // A live chat: the Detective opens a conversation with a guest, then types
+  // questions. An NPC answers live (llm.ts), paced to a human-like delay so
+  // speed can't out it; a human target types their own replies.
 
-  private startInterview(client: Client, target: string) {
+  private openInterview(client: Client, target: string) {
     const asker = this.bodyOf.get(client.sessionId);
     if (!asker) return;
 
-    // The tablet — and interviewing — belong to the Detective only. The Spy has
-    // no tablet at all; enforce it here so it can't be bypassed client-side.
+    // The tablet — and interviewing — belong to the Detective only.
     if (this.roles.get(client.sessionId) !== "detective") {
       client.send("interview_denied", { reason: "Only the detective can question guests." });
-      return;
-    }
-
-    // One at a time, and respect the cooldown.
-    if (this.interviews.has(client.sessionId)) {
-      client.send("interview_denied", { reason: "You're already questioning someone." });
-      return;
-    }
-    const last = this.lastInterview.get(client.sessionId) ?? -Infinity;
-    const wait = INTERVIEW_COOLDOWN_MS - (Date.now() - last);
-    if (wait > 0) {
-      client.send("interview_denied", { reason: `Wait ${Math.ceil(wait / 1000)}s before questioning again.` });
       return;
     }
 
@@ -213,94 +216,111 @@ export class HouseRoom extends Room<HouseState> {
       return;
     }
 
+    // Opening a new chat closes any current one.
+    this.closeInterview(client.sessionId);
+
     const interview: Interview = {
       detective: client.sessionId,
       target,
-      startedAt: Date.now(),
-      answer: null,
       humanTarget: this.driverOf.get(target) ?? null,
+      history: [],
+      busy: false,
+      lastActivity: Date.now(),
     };
     this.interviews.set(client.sessionId, interview);
-    this.lastInterview.set(client.sessionId, interview.startedAt);
-
-    // The Detective's panel goes blank for the whole window (SOW §4) — the wait
-    // is identical whether the answer is written by AI, by a human, or falls
-    // back, so latency and human typing time are both hidden inside it.
-    client.send("interview_started", { target, name: person.name, windowMs: INTERVIEW_MS });
+    client.send("interview_open", { target, name: person.name });
 
     if (interview.humanTarget) {
-      // The target is a person. Their screen becomes the typing box; their body
-      // autopilots so it doesn't freeze and give them away (SOW §2.3). They can
-      // read the persona they're wearing, so they can perform it, not invent it.
+      // Being questioned takes over the human's screen and puts their body on
+      // autopilot so it keeps milling about instead of freezing (SOW §2.3).
       this.autopilot.add(target);
       this.brains.get(target)?.resume();
       const persona = this.personas.get(target)!;
       const humanClient = this.clients.find((c) => c.sessionId === interview.humanTarget);
-      humanClient?.send("interview_prompt", {
-        question: QUESTION,
+      humanClient?.send("interview_begin", {
         cap: ANSWER_CAP,
-        windowMs: INTERVIEW_MS,
         persona: { job: persona.job, tie: persona.tie, reason: persona.reason, host: this.host },
       });
-    } else {
-      // An NPC. Generate the answer during the blank window; it's ready long
-      // before the panel reveals it.
-      this.generateNpcAnswer(interview);
     }
-
-    // Reveal at the end of the window no matter what.
-    this.clock.setTimeout(() => this.finishInterview(client.sessionId), INTERVIEW_MS);
   }
 
-  private async generateNpcAnswer(interview: Interview) {
+  private askQuestion(client: Client, text: string) {
+    const interview = this.interviews.get(client.sessionId);
+    if (!interview || interview.busy) return;
+    const q = scrub(text).slice(0, ANSWER_CAP);
+    if (!q) return;
+
+    interview.history.push({ role: "detective", text: q });
+    interview.lastActivity = Date.now();
+    interview.busy = true;
+    client.send("interview_typing", {}); // "…" while the guest replies
+
+    if (interview.humanTarget) {
+      // Relay the question to the human; they type back (humanReply).
+      const humanClient = this.clients.find((c) => c.sessionId === interview.humanTarget);
+      humanClient?.send("interview_question", { text: q });
+    } else {
+      this.answerAsNpc(interview);
+    }
+  }
+
+  /** An NPC answers live, held back to a human-like pace so timing isn't a tell. */
+  private async answerAsNpc(interview: Interview) {
     const persona = this.personas.get(interview.target);
     const person = this.state.people.get(interview.target);
     if (!persona || !person) return;
 
-    const live = await liveAnswer(persona); // null without a key, or on timeout
-    // The interview may have ended (target left, etc.) while we awaited.
+    const started = Date.now();
+    const q = interview.history[interview.history.length - 1]?.text ?? "";
+    const live = await liveReply(persona, this.host, interview.history);
+    const text = live ?? authoredReply(person.name, persona, this.host, q);
+
+    // The interview may have closed or moved on while we awaited.
+    const current = this.interviews.get(interview.detective);
+    if (current !== interview) return;
+
+    // Pace it: total time from "typing" to reply is a length-scaled, human-like
+    // delay that absorbs however long generation took (SOW §5.2).
+    const targetMs = clampMs(REPLY_MIN_MS + text.length * REPLY_PER_CHAR_MS);
+    await sleep(Math.max(0, targetMs - (Date.now() - started)));
     if (this.interviews.get(interview.detective) !== interview) return;
-    interview.answer = live ?? authoredAnswer(person.name, persona, this.host);
+
+    this.deliverGuestReply(interview, text, expressionFor(persona.voice));
   }
 
-  private receiveReply(client: Client, text: string) {
-    // Find the interview where this client is the one being questioned.
+  private humanReply(client: Client, text: string) {
     for (const interview of this.interviews.values()) {
-      if (interview.humanTarget === client.sessionId && interview.answer === null) {
-        interview.answer = scrub(text).slice(0, ANSWER_CAP);
-        // They submitted — hand their body back and close their typing box.
-        this.endAutopilot(interview.target);
-        client.send("interview_end", {});
+      if (interview.humanTarget === client.sessionId && interview.busy) {
+        const reply = scrub(text).slice(0, ANSWER_CAP);
+        const persona = this.personas.get(interview.target);
+        this.deliverGuestReply(interview, reply, persona ? expressionFor(persona.voice) : "neutral");
         return;
       }
     }
   }
 
-  private finishInterview(detectiveSession: string) {
+  private deliverGuestReply(interview: Interview, text: string, expression: string) {
+    interview.history.push({ role: "guest", text });
+    interview.busy = false;
+    interview.lastActivity = Date.now();
+    const detective = this.clients.find((c) => c.sessionId === interview.detective);
+    const person = this.state.people.get(interview.target);
+    detective?.send("interview_msg", {
+      from: "guest",
+      name: person?.name ?? "",
+      text,
+      expression,
+    });
+  }
+
+  private closeInterview(detectiveSession: string) {
     const interview = this.interviews.get(detectiveSession);
     if (!interview) return;
     this.interviews.delete(detectiveSession);
-
-    const person = this.state.people.get(interview.target);
-    const persona = this.personas.get(interview.target);
-
-    // If a human was asked but never submitted, fall back to their persona's
-    // authored line — so the Detective still gets something, and a Spy learns to
-    // answer before the clock runs out.
-    if (interview.answer === null && person && persona) {
-      interview.answer = authoredAnswer(person.name, persona, this.host);
-    }
-    // Autopilot may still be running if the human never replied.
     this.endAutopilot(interview.target);
-
-    const detective = this.clients.find((c) => c.sessionId === detectiveSession);
-    if (detective && person && persona) {
-      detective.send("interview_answer", {
-        target: interview.target,
-        name: person.name,
-        expression: expressionFor(persona.voice),
-        text: interview.answer ?? "",
-      });
+    if (interview.humanTarget) {
+      const humanClient = this.clients.find((c) => c.sessionId === interview.humanTarget);
+      humanClient?.send("interview_end", {});
     }
   }
 
@@ -411,15 +431,12 @@ export class HouseRoom extends Room<HouseState> {
   }
 
   onLeave(client: Client) {
-    // Cancel any interview this client was asking — no answer will come.
-    this.interviews.delete(client.sessionId);
-    // If they were the one being interviewed, let the window fall back to the
-    // authored line by clearing the human target and stopping autopilot.
-    for (const interview of this.interviews.values()) {
-      if (interview.humanTarget === client.sessionId) {
-        interview.humanTarget = null;
-        this.endAutopilot(interview.target);
-      }
+    // Close the chat this client was running as Detective.
+    this.closeInterview(client.sessionId);
+    // If they were the one being questioned, close it from the other side too:
+    // drop them as the human target so the chat ends rather than hanging.
+    for (const [det, interview] of this.interviews) {
+      if (interview.humanTarget === client.sessionId) this.closeInterview(det);
     }
 
     const bodyId = this.bodyOf.get(client.sessionId);
@@ -432,7 +449,6 @@ export class HouseRoom extends Room<HouseState> {
     }
     this.inputs.delete(client.sessionId);
     this.held.delete(client.sessionId);
-    this.lastInterview.delete(client.sessionId);
     this.roles.delete(client.sessionId);
 
     // If the host left, promote the next player and let them pick — otherwise
@@ -455,6 +471,14 @@ export class HouseRoom extends Room<HouseState> {
 
   private tick(dt: number) {
     const now = Date.now();
+
+    // ---- auto-close idle interviews, so a human target isn't pinned in the
+    // chat (and on autopilot) forever if the Detective wanders off.
+    for (const [det, interview] of this.interviews) {
+      if (!interview.busy && now - interview.lastActivity > INTERVIEW_IDLE_MS) {
+        this.closeInterview(det);
+      }
+    }
 
     // ---- human-driven bodies
     for (const [sessionId, bodyId] of this.bodyOf) {

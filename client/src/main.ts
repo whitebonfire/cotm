@@ -368,28 +368,31 @@ function wire(room: Room<HouseState>) {
     enterGameWithRole(m.role)
   );
 
-  // ---- interviews (SOW §5)
-  // Detective side: pick a guest → blank panel → the reveal.
+  // ---- interviews (SOW §5): a live chat
+  // Detective side: open a chat, type questions, read the replies.
   tablet.onInterview = (id: string) => room.send("interview", { target: id });
-  room.onMessage("interview_started", (m: { target: string; name: string; windowMs: number }) => {
-    tablet.interviewMs = m.windowMs;
-    tablet.interviewStarted(m.target, m.name);
-  });
-  room.onMessage("interview_answer", (m: any) => tablet.interviewAnswer(m));
+  tablet.onAsk = (text: string) => room.send("interview_ask", { text });
+  tablet.onCloseInterview = () => room.send("interview_close", {});
+  room.onMessage("interview_open", (m: { target: string; name: string }) =>
+    tablet.interviewOpen(m.target, m.name)
+  );
+  room.onMessage("interview_typing", () => tablet.interviewTyping());
+  room.onMessage("interview_msg", (m: any) => tablet.interviewMsg(m));
   room.onMessage("interview_denied", (m: { reason: string }) => tablet.interviewDenied(m.reason));
 
-  // Being-questioned side: the typing box takes over the screen.
-  interviewBox.onSubmit = (text: string) => room.send("interview_reply", { text });
-  room.onMessage("interview_prompt", (m: any) => {
+  // Being-questioned side: the chat box takes over the screen.
+  interviewBox.onSubmit = (text: string) => room.send("interview_answer", { text });
+  room.onMessage("interview_begin", (m: any) => {
     beingInterviewed = true;
     tablet.close();
     document.exitPointerLock();
-    interviewBox.windowMs = m.windowMs ?? 40000;
-    interviewBox.show(m);
+    interviewBox.begin(m);
   });
+  room.onMessage("interview_question", (m: { text: string }) => interviewBox.question(m.text));
   room.onMessage("interview_end", () => {
     beingInterviewed = false;
     interviewBox.hide();
+    tablet.interviewClosedByServer();
   });
 
   $(room.state).people.onAdd((person: Person, id: string) => {
