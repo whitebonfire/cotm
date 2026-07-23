@@ -201,10 +201,40 @@ const hud = document.getElementById("hud") as HTMLDivElement;
 playBtn.disabled = false;
 playBtn.textContent = "ENTER THE HOUSE";
 
+/**
+ * Tear the world down to nothing.
+ *
+ * A dropped connection does NOT emit people.onRemove for each body, so without
+ * this a reconnect (the "rejoin" button) adds a fresh 12 guests on top of the
+ * frozen old ones — you end up with 24 ghosts, none of them moving. Clear
+ * everything before every join so a fresh room starts from an empty scene.
+ */
+function clearWorld() {
+  bodies.forEach((b) => scene.remove(b.rig.group));
+  bodies.clear();
+  myBody = null;
+  selfRing.visible = false;
+  tablet.close();
+}
+
 playBtn.addEventListener("click", async () => {
   playBtn.disabled = true;
   playBtn.textContent = "connecting…";
   try {
+    // Drop any previous room and wipe its bodies before joining a new one.
+    // Do NOT await leave(): after a server restart the old socket is already
+    // dead, and its leave() promise never resolves — awaiting it hangs the
+    // rejoin on "connecting…" forever. Fire it and move on.
+    if (room) {
+      try {
+        room.leave(false);
+      } catch {
+        /* already gone */
+      }
+      room = null;
+    }
+    clearWorld();
+
     const client = new Client(endpoint);
     room = await client.joinOrCreate<HouseState>("house", {
       name: localStorage.getItem("cotm:name") ?? "",
@@ -274,6 +304,9 @@ function wire(room: Room<HouseState>) {
   });
 
   room.onLeave((code) => {
+    // Drop the frozen scene immediately rather than leaving 12 stale ghosts
+    // sitting behind the overlay waiting to be doubled on rejoin.
+    clearWorld();
     hud.innerHTML = `<b>disconnected</b> (code ${code})`;
     overlay.classList.remove("hidden");
     playBtn.disabled = false;
