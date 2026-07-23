@@ -89,6 +89,12 @@ export class HouseRoom extends Room<HouseState> {
   private bodyOf = new Map<string, string>(); // sessionId -> bodyId
   private driverOf = new Map<string, string>(); // bodyId -> sessionId
 
+  // ---- roles. Also the disguise: a role is sent ONLY to the player it belongs
+  // to (see grantRole), never into Schema — the Detective must never be able to
+  // read who the Spy is. The host picks first; the next player takes the other.
+  private roles = new Map<string, "detective" | "spy">(); // sessionId -> role
+  private hostSession: string | null = null;
+
   /** sessionId -> the action they're holding while stood at an anchor. */
   private held = new Map<string, number>();
 
@@ -149,6 +155,20 @@ export class HouseRoom extends Room<HouseState> {
       }
     });
 
+    // ---- roles: only the host picks, and only once.
+    this.onMessage("pick_role", (client: Client, msg: { role?: string }) => {
+      if (client.sessionId !== this.hostSession) return; // host picks first
+      if (this.roles.has(client.sessionId)) return; // already chose
+      const role = msg?.role === "spy" ? "spy" : "detective";
+      this.grantRole(client.sessionId, role);
+      // Hand the leftover role to whoever's been waiting.
+      const other = role === "detective" ? "spy" : "detective";
+      const waiting = this.clients.find(
+        (c) => c.sessionId !== this.hostSession && !this.roles.has(c.sessionId)
+      );
+      if (waiting) this.grantRole(waiting.sessionId, other);
+    });
+
     // ---- interviews (SOW §5)
     this.onMessage("interview", (client: Client, msg: { target?: string }) => {
       this.startInterview(client, typeof msg?.target === "string" ? msg.target : "");
@@ -167,6 +187,13 @@ export class HouseRoom extends Room<HouseState> {
   private startInterview(client: Client, target: string) {
     const asker = this.bodyOf.get(client.sessionId);
     if (!asker) return;
+
+    // The tablet — and interviewing — belong to the Detective only. The Spy has
+    // no tablet at all; enforce it here so it can't be bypassed client-side.
+    if (this.roles.get(client.sessionId) !== "detective") {
+      client.send("interview_denied", { reason: "Only the detective can question guests." });
+      return;
+    }
 
     // One at a time, and respect the cooldown.
     if (this.interviews.has(client.sessionId)) {
@@ -350,11 +377,37 @@ export class HouseRoom extends Room<HouseState> {
     // The client is told which body is theirs, and nothing about anyone else's.
     client.send("you", { body: bodyId, name: person.name });
 
+    // Roles: first player in is the host and picks; everyone after takes the
+    // leftover once the host has chosen (SOW §2.1, host-picks-first).
+    if (!this.hostSession) {
+      this.hostSession = client.sessionId;
+      client.send("role_pick", {});
+    } else {
+      const hostRole = this.roles.get(this.hostSession);
+      if (hostRole) {
+        const other = hostRole === "detective" ? "spy" : "detective";
+        // Give the other role only if it's still free (the 2-human game).
+        if (![...this.roles.values()].includes(other)) this.grantRole(client.sessionId, other);
+        else client.send("your_role", { role: "none" });
+      } else {
+        client.send("role_wait", {}); // the host is still choosing
+      }
+    }
+
     console.log(
       `[house] a player took over ${person.name} (${this.driverOf.size} human, ${
         PARTY_SIZE - this.driverOf.size
       } NPC)`
     );
+  }
+
+  /** Tell one player their role — and only that player. Never broadcast; the
+   *  Detective must never learn who the Spy is (SOW §7.1). */
+  private grantRole(sessionId: string, role: "detective" | "spy") {
+    this.roles.set(sessionId, role);
+    const client = this.clients.find((c) => c.sessionId === sessionId);
+    client?.send("your_role", { role });
+    console.log(`[house] a player is the ${role}`);
   }
 
   onLeave(client: Client) {
@@ -380,6 +433,19 @@ export class HouseRoom extends Room<HouseState> {
     this.inputs.delete(client.sessionId);
     this.held.delete(client.sessionId);
     this.lastInterview.delete(client.sessionId);
+    this.roles.delete(client.sessionId);
+
+    // If the host left, promote the next player and let them pick — otherwise
+    // roles could deadlock with nobody able to choose.
+    if (client.sessionId === this.hostSession) {
+      this.hostSession = null;
+      const next = this.clients.find((c) => c.sessionId !== client.sessionId);
+      if (next) {
+        this.hostSession = next.sessionId;
+        this.roles.delete(next.sessionId);
+        next.send("role_pick", {});
+      }
+    }
     console.log(`[house] a player left (${this.driverOf.size} human bodies remain)`);
   }
 

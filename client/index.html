@@ -204,6 +204,32 @@
       .tb-count { font-size: 12px; color: #6c7180; }
       .tb-count.full { color: #ff5d5d; }
       .tb-send { margin-left: auto; }
+
+      /* role selection */
+      #roleoverlay {
+        position: fixed; inset: 0; z-index: 30; display: grid; place-items: center;
+        background: rgba(8, 10, 14, 0.95); backdrop-filter: blur(3px);
+      }
+      #roleoverlay.hidden { display: none; }
+      #roleoverlay .card { text-align: center; max-width: 560px; padding: 0 20px; }
+      #roleoverlay h1 { font-size: 20px; letter-spacing: 0.06em; margin-bottom: 8px; }
+      #roleoverlay .sub { font-size: 12px; opacity: 0.55; margin-bottom: 30px; }
+      .role-choices { display: flex; gap: 20px; justify-content: center; }
+      .role-choice {
+        flex: 1; max-width: 220px; padding: 26px 20px; border: 1px solid #3a3f4b;
+        border-radius: 8px; background: #12151c; cursor: pointer; transition: all 0.15s;
+      }
+      .role-choice:hover { border-color: #d8b46a; background: #171b22; transform: translateY(-2px); }
+      .role-choice .icon { font-size: 40px; }
+      .role-choice .name { margin: 12px 0 6px; font-size: 16px; letter-spacing: 0.08em; color: #e8e6e1; }
+      .role-choice .blurb { font-size: 11.5px; line-height: 1.6; color: #8b90a0; }
+      .role-wait { font-size: 15px; color: #cdd0d8; }
+      .role-wait .dots { color: #d8b46a; }
+      .role-assigned { font-size: 15px; color: #cdd0d8; }
+      .role-assigned .big {
+        display: block; font-size: 34px; letter-spacing: 0.12em; margin: 14px 0 6px;
+        color: #d8b46a; font-weight: 700;
+      }
     </style>
   </head>
   <body>
@@ -212,13 +238,21 @@
     <div id="overlay">
       <div class="card">
         <h1>🔎 CLUES OF THE MIND 🕶</h1>
-        <div class="sub">milestone 5 &middot; the interview</div>
+        <div class="sub">milestone 6 &middot; roles</div>
         <button id="play" disabled>connecting&hellip;</button>
         <p>
           <kbd>W</kbd><kbd>A</kbd><kbd>S</kbd><kbd>D</kbd> move &middot; mouse look &middot; <kbd>E</kbd> join in<br />
-          <kbd>F</kbd> drop a camera &middot; <kbd>Q</kbd> tablet, then question a guest<br />
-          <span style="opacity:.6">you are one of the guests</span>
+          detective tools: <kbd>F</kbd> camera &middot; <kbd>Q</kbd> tablet<br />
+          <span style="opacity:.6">host picks a role, friend takes the other</span>
         </p>
+      </div>
+    </div>
+
+    <div id="roleoverlay" class="hidden">
+      <div class="card">
+        <h1>🔎 CLUES OF THE MIND 🕶</h1>
+        <div class="sub">choose how you'll play</div>
+        <div class="role-body"></div>
       </div>
     </div>
 

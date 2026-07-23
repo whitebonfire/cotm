@@ -117,6 +117,11 @@ window.addEventListener("keydown", (e) => {
       if (!tablet.up) room.send("act");
       break;
     case "KeyQ":
+      // The tablet is the Detective's device. The Spy has no tablet at all.
+      if (myRole !== "detective") {
+        if (myRole === "spy") setFlash("spies don't carry a tablet");
+        break;
+      }
       // Raising the tablet frees the cursor (for the roster buttons) and stops
       // you moving — you're standing still, looking at a screen.
       tablet.toggle();
@@ -128,7 +133,8 @@ window.addEventListener("keydown", (e) => {
       }
       break;
     case "KeyF":
-      if (!tablet.up) {
+      // Placing a camera is a Detective tool too.
+      if (myRole === "detective" && !tablet.up) {
         // Drop the camera where you stand, looking the way you face.
         tablet.place(localPos.x, localPos.z, -Math.sin(camYaw), -Math.cos(camYaw));
         setFlash("📷 camera placed — raise the tablet (Q) to watch");
@@ -209,9 +215,60 @@ let localYaw = Math.PI;
 const overlay = document.getElementById("overlay") as HTMLDivElement;
 const playBtn = document.getElementById("play") as HTMLButtonElement;
 const hud = document.getElementById("hud") as HTMLDivElement;
+const roleOverlay = document.getElementById("roleoverlay") as HTMLDivElement;
+const roleBody = roleOverlay.querySelector(".role-body") as HTMLDivElement;
+
+/** Your role for the round. null until the server assigns it. The Spy has no
+ *  tablet — only the Detective does (SOW §7.1 / tablet-is-detective-only). */
+let myRole: "detective" | "spy" | "none" | null = null;
 
 playBtn.disabled = false;
 playBtn.textContent = "ENTER THE HOUSE";
+
+function showRolePicker() {
+  roleOverlay.classList.remove("hidden");
+  roleBody.innerHTML = `
+    <div style="font-size:13px;color:#8b90a0;margin-bottom:22px">
+      You're hosting, so you choose first. Your friend takes the other role.
+    </div>
+    <div class="role-choices">
+      <div class="role-choice" data-role="detective">
+        <div class="icon">🔎</div>
+        <div class="name">DETECTIVE</div>
+        <div class="blurb">Find the spy among the guests. You carry the tablet: cameras, interviews, and the guess.</div>
+      </div>
+      <div class="role-choice" data-role="spy">
+        <div class="icon">🕶</div>
+        <div class="name">SPY</div>
+        <div class="blurb">Hide in plain sight. Complete your tasks and answer the detective's questions without giving yourself away.</div>
+      </div>
+    </div>`;
+  roleBody.querySelectorAll(".role-choice").forEach((el) =>
+    el.addEventListener("click", () => {
+      const role = (el as HTMLElement).getAttribute("data-role");
+      room?.send("pick_role", { role });
+      roleBody.innerHTML = `<div class="role-wait">locking it in<span class="dots">…</span></div>`;
+    })
+  );
+}
+
+function showRoleWait() {
+  roleOverlay.classList.remove("hidden");
+  roleBody.innerHTML = `<div class="role-wait">waiting for the host to choose<span class="dots">…</span></div>`;
+}
+
+function enterGameWithRole(role: "detective" | "spy" | "none") {
+  myRole = role;
+  const label = role === "detective" ? "🔎 DETECTIVE" : role === "spy" ? "🕶 SPY" : "GUEST";
+  roleOverlay.classList.remove("hidden");
+  roleBody.innerHTML = `<div class="role-assigned">you are the<span class="big">${label}</span>
+    ${role === "spy" ? "blend in. no tablet — you're one of them." : role === "detective" ? "raise the tablet with Q and start questioning." : ""}</div>`;
+  // Beat to read it, then into the house.
+  setTimeout(() => {
+    roleOverlay.classList.add("hidden");
+    if (room && !locked) renderer.domElement.requestPointerLock();
+  }, 1700);
+}
 
 /**
  * Tear the world down to nothing.
@@ -225,8 +282,10 @@ function clearWorld() {
   bodies.forEach((b) => scene.remove(b.rig.group));
   bodies.clear();
   myBody = null;
+  myRole = null;
   selfRing.visible = false;
   tablet.close();
+  roleOverlay.classList.add("hidden");
 }
 
 playBtn.addEventListener("click", async () => {
@@ -252,8 +311,10 @@ playBtn.addEventListener("click", async () => {
       name: localStorage.getItem("cotm:name") ?? "",
     });
     wire(room);
+    // Don't drop into the house yet — the role overlay takes over until the
+    // server assigns a role (host picks; the other player waits then takes the
+    // leftover). enterGameWithRole() grabs pointer lock once that's settled.
     overlay.classList.add("hidden");
-    renderer.domElement.requestPointerLock();
   } catch (err) {
     console.error(err);
     playBtn.disabled = false;
@@ -299,6 +360,13 @@ function wire(room: Room<HouseState>) {
       localYaw = mine.person.yaw;
     }
   });
+
+  // ---- roles (host picks first)
+  room.onMessage("role_pick", () => showRolePicker());
+  room.onMessage("role_wait", () => showRoleWait());
+  room.onMessage("your_role", (m: { role: "detective" | "spy" | "none" }) =>
+    enterGameWithRole(m.role)
+  );
 
   // ---- interviews (SOW §5)
   // Detective side: pick a guest → blank panel → the reveal.
@@ -492,14 +560,18 @@ function tick() {
   if (room) {
     const here = roomAt(localPos.x, localPos.z);
     const doing = self ? ACTION_NAME[self.person.action] ?? "" : "";
+    const roleTag =
+      myRole === "detective" ? `🔎 <b>DETECTIVE</b>` : myRole === "spy" ? `🕶 <b>SPY</b>` : "";
     const hint = tablet.up
       ? `watching — <b>Q</b> to lower the tablet`
-      : locked
-        ? `<b>F</b> camera · <b>Q</b> tablet · <b>E</b> join in`
-        : `<b>click</b> to look around`;
+      : !locked
+        ? `<b>click</b> to look around`
+        : myRole === "detective"
+          ? `<b>F</b> camera · <b>Q</b> tablet · <b>E</b> join in`
+          : `<b>E</b> join in at a spot`;
     const flashLine = elapsed < flashUntil ? `<span style="color:#d8b46a">${flash}</span>` : "";
     hud.innerHTML = [
-      `<b>🔎 clues of the mind</b> — milestone 4`,
+      `<b>🔎 clues of the mind</b> — milestone 6 ${roleTag}`,
       `<b>${here?.name ?? "…"}</b> · ${bodies.size} guests`,
       `you are <b>${self?.person.name ?? "…"}</b>, ${doing}`,
       hint,

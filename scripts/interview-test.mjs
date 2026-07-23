@@ -12,17 +12,23 @@ const check = (name, pass, detail = "") => {
   console.log(`${pass ? "  PASS" : "  FAIL"}  ${name}${detail ? `  (${detail})` : ""}`);
 };
 
-/** Join and capture our body id, plus a simple message inbox. */
+/** Join and capture our body id, plus a simple message inbox. Register ALL
+ *  handlers synchronously right after joining — the server sends "you" and
+ *  "role_pick" during onJoin, and any handler attached after an await gap would
+ *  miss them. (The real client wires everything synchronously too.) */
 async function join(name) {
   const room = await new Client(ENDPOINT).joinOrCreate("house", { name });
   const inbox = [];
-  const me = await new Promise((resolve) => room.onMessage("you", resolve));
   for (const type of [
+    "you",
     "interview_started",
     "interview_answer",
     "interview_denied",
     "interview_prompt",
     "interview_end",
+    "role_pick",
+    "role_wait",
+    "your_role",
   ]) {
     room.onMessage(type, (m) => inbox.push({ type, m, at: Date.now() }));
   }
@@ -36,16 +42,37 @@ async function join(name) {
     return null;
   };
   const clearInbox = () => (inbox.length = 0);
+  const me = await waitFor("you", 3000);
   return { room, me, inbox, waitFor, clearInbox };
 }
 
 const a = await join("alice");
 const b = await join("bob");
-await sleep(500);
+await sleep(400);
+
+// ---- roles (host picks first). Alice joined first, so she's the host.
+const hostPrompt = await a.waitFor("role_pick", 1500);
+check("the first player in is the host and gets to pick", !!hostPrompt);
+const bobWaits = await b.waitFor("role_wait", 1500);
+check("the other player waits for the host to choose", !!bobWaits);
+
+a.room.send("pick_role", { role: "detective" });
+const aRole = await a.waitFor("your_role", 1500);
+const bRole = await b.waitFor("your_role", 1500);
+check("the host's pick is applied", aRole?.role === "detective", `alice=${aRole?.role}`);
+check("the other player gets the leftover role", bRole?.role === "spy", `bob=${bRole?.role}`);
+a.clearInbox();
+b.clearInbox();
 
 const keys = [...a.room.state.people.keys()];
 const npc = keys.find((k) => k !== a.me.body && k !== b.me.body);
 const VALID_EXPR = ["neutral", "wary", "loose", "nervous", "composed", "warm", "flat"];
+
+// The Spy has no tablet — the server rejects an interview from a non-detective.
+b.room.send("interview", { target: npc });
+const spyDenied = await b.waitFor("interview_denied", 1000);
+check("the spy cannot interview (no tablet)", !!spyDenied, spyDenied?.reason);
+b.clearInbox();
 
 // ---- 1. interview an NPC: blank window, then an answer
 a.clearInbox();
