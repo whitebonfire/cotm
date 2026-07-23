@@ -62,10 +62,10 @@ same window to type, auto-submitted at the end. Per-answer character cap and the
 writing-voice spread are unchanged. (This is essentially the original blank
 panel, per-question, at 20s.)
 
-Open questions this raises, to revisit in playtesting: whether the pacing band
-(currently ~2.5–14s) actually overlaps human typing times well enough, and
-whether an interrogated human being pinned on autopilot for the chat's duration
-(auto-released after the Detective goes idle) is the right cost.
+Open questions this raises, to revisit in playtesting: whether 20s is the right
+window (long enough for a human to type a good answer, short enough not to drag),
+and whether an interrogated human being pinned on autopilot for the chat's
+duration (auto-released after the Detective goes idle) is the right cost.
 
 ### 2.3 No freeze — resolved
 
@@ -95,7 +95,7 @@ Settled during the interview, listed so we can catch drift later.
 | Guesses | 2. Wrong twice = Spy wins. |
 | Runout | **Detective wins.** The 10-minute clock is the Spy's deadline (§2.2). |
 | Interview | **Live chat** on the Detective's tablet (changed from the 40s blank panel — see §2.2a). The Detective types questions; the guest answers turn by turn, with a face + expression. |
-| Interview answers | **Live AI generation** per reply, in the guest's voice, hard timeout to authored fallback; paced to a human-like delay. |
+| Interview answers | **Live AI generation** per reply, in the guest's voice, hard timeout to authored fallback; held behind a fixed reveal window (§2.2a) so timing hides AI vs human. |
 | Roleplay | **All 12 NPCs** carry a full persona and stay in character across the whole round. |
 | Writing quality | NPCs deliberately write imperfectly, across a **spread** of voices (§5.3). |
 | Judging | Pure judgement. The Detective reads the writing. Follow-up questions are now the whole point (live chat, §2.2a). |
