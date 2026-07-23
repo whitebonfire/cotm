@@ -10,8 +10,13 @@
  * It lives under server/ so the server's tsc build (rootDir server/src) can
  * reach it. The client imports across the tree; Vite bundles it fine.
  *
+ * Furniture colliders live in furniture.ts and are folded into
+ * resolveCollisions() below, so a single call handles walls and furniture both.
+ *
  * No decorators, no Schema, no imports — plain data and maths on purpose.
  */
+
+import { resolveAgainstSolids } from "./furniture.js";
 
 export const WALL_HEIGHT = 3.2;
 export const WALL_THICKNESS = 0.3;
@@ -204,6 +209,15 @@ export function resolveCollisions(
 
       x = cx + (ox / dist) * r;
       z = cz + (oz / dist) * r;
+      touched = true;
+    }
+
+    // Furniture, in the same passes so a body wedged between a table and a wall
+    // settles instead of jittering between the two.
+    const solved = resolveAgainstSolids(x, z, radius);
+    if (solved.x !== x || solved.z !== z) {
+      x = solved.x;
+      z = solved.z;
       touched = true;
     }
 

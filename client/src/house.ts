@@ -10,6 +10,7 @@ import {
   DOOR_WIDTH,
   DOOR_HEIGHT,
 } from "../../server/src/world/house";
+import { SOLIDS } from "../../server/src/world/furniture";
 
 /**
  * Builds the house from the shared floor plan.
@@ -116,17 +117,19 @@ export function buildHouse(scene: THREE.Scene): { colliders: THREE.Object3D[] } 
 /**
  * The things people are standing at.
  *
- * The anchors in nav.ts already say "someone reads here", "someone drinks
- * here". This gives those claims something to be true about — a body reading
- * at a bare wall reads as a bug, not as a guest.
+ * The bulky obstacles come straight from the shared SOLIDS list, so every piece
+ * of furniture you can see is one you can't walk through, and vice versa — the
+ * same guarantee the walls have. Decorative extras (book spines, glass tops,
+ * table legs) and the pass-through seats (chairs, couch) are added on top; they
+ * carry no collider, which is why you can sit on them.
  */
 export function buildFurniture(scene: THREE.Scene) {
   const group = new THREE.Group();
   scene.add(group);
 
-  const wood = new THREE.MeshStandardMaterial({ color: 0x4a3a24, roughness: 0.8 });
-  const dark = new THREE.MeshStandardMaterial({ color: 0x2e2620, roughness: 0.85 });
   const cloth = new THREE.MeshStandardMaterial({ color: 0x5c3a48, roughness: 0.9 });
+  const chairWood = new THREE.MeshStandardMaterial({ color: 0x4a3a24, roughness: 0.8 });
+  const legDark = new THREE.MeshStandardMaterial({ color: 0x2e2620, roughness: 0.85 });
   const glass = new THREE.MeshStandardMaterial({
     color: 0x9fd6e8,
     roughness: 0.15,
@@ -135,92 +138,82 @@ export function buildFurniture(scene: THREE.Scene) {
     opacity: 0.34,
   });
 
-  const box = (
-    mat: THREE.Material,
-    w: number,
-    h: number,
-    d: number,
-    x: number,
-    y: number,
-    z: number
-  ) => {
-    const mesh = new THREE.Mesh(new THREE.BoxGeometry(w, h, d), mat);
-    mesh.position.set(x, y, z);
+  const matCache = new Map<number, THREE.MeshStandardMaterial>();
+  const mat = (color: number) => {
+    let m = matCache.get(color);
+    if (!m) {
+      m = new THREE.MeshStandardMaterial({ color, roughness: 0.82 });
+      matCache.set(color, m);
+    }
+    return m;
+  };
+
+  // ---- solids, drawn from the shared collider list
+  for (const s of SOLIDS) {
+    if (!s.render) continue;
+    const mesh = new THREE.Mesh(new THREE.BoxGeometry(s.hw * 2, s.h, s.hd * 2), mat(s.color));
+    mesh.position.set(s.cx, s.y, s.cz);
     mesh.castShadow = true;
     mesh.receiveShadow = true;
     group.add(mesh);
-    return mesh;
-  };
 
-  // Library: shelves down the west wall, packed with books to take down
-  const bookMat: THREE.MeshStandardMaterial[] = [];
-  for (let i = 0; i < 8; i++) {
-    bookMat.push(
-      new THREE.MeshStandardMaterial({
-        color: new THREE.Color().setHSL(Math.random(), 0.4, 0.3),
-        roughness: 0.8,
-      })
-    );
-  }
-  for (let z = -14; z <= -6; z += 2) {
-    box(wood, 0.5, 2.4, 1.8, -19.5, 1.2, z);
-    // Spines on the room-facing side, in three rows.
-    for (const shelfY of [0.55, 1.2, 1.85]) {
-      let bz = z - 0.78;
-      while (bz < z + 0.78) {
-        const w = 0.05 + Math.random() * 0.04;
-        const h = 0.28 + Math.random() * 0.12;
-        const spine = new THREE.Mesh(
-          new THREE.BoxGeometry(0.16, h, w),
-          bookMat[Math.floor(Math.random() * bookMat.length)]
-        );
-        spine.position.set(-19.18, shelfY + h / 2 - 0.02, bz + w / 2);
-        spine.castShadow = true;
-        group.add(spine);
-        bz += w + 0.012;
+    if (s.id.startsWith("shelf")) {
+      // Rows of book spines on the room-facing side, to be taken down and read.
+      for (const shelfY of [0.55, 1.2, 1.85]) {
+        let bz = s.cz - 0.78;
+        while (bz < s.cz + 0.78) {
+          const w = 0.05 + Math.random() * 0.04;
+          const h = 0.28 + Math.random() * 0.12;
+          const spine = new THREE.Mesh(
+            new THREE.BoxGeometry(0.16, h, w),
+            mat(new THREE.Color().setHSL(Math.random(), 0.4, 0.3).getHex())
+          );
+          spine.position.set(s.cx + 0.32, shelfY + h / 2 - 0.02, bz + w / 2);
+          spine.castShadow = true;
+          group.add(spine);
+          bz += w + 0.012;
+        }
       }
+    } else if (s.id.startsWith("case")) {
+      // Glass top over the display case.
+      const top = new THREE.Mesh(new THREE.BoxGeometry(s.hw * 2 - 0.1, 0.7, s.hd * 2 - 0.1), glass);
+      top.position.set(s.cx, s.y + 0.8, s.cz);
+      group.add(top);
     }
   }
 
-  // Study: display cases along the north wall — the jewels live here
-  for (const x of [-3.5, 0, 3.5]) {
-    box(dark, 1.6, 0.9, 0.6, x, 0.45, -14.4);
-    box(glass, 1.5, 0.7, 0.5, x, 1.25, -14.4);
+  // ---- the dining table: a thin top on legs (collider is its footprint)
+  const table = SOLIDS.find((s) => s.id === "table")!;
+  const top = new THREE.Mesh(new THREE.BoxGeometry(table.hw * 2, 0.08, table.hd * 2), cloth);
+  top.position.set(table.cx, 0.78, table.cz);
+  top.castShadow = true;
+  top.receiveShadow = true;
+  group.add(top);
+  for (const [x, z] of [
+    [table.cx - 2.8, table.cz - 1.0],
+    [table.cx + 2.8, table.cz - 1.0],
+    [table.cx - 2.8, table.cz + 1.0],
+    [table.cx + 2.8, table.cz + 1.0],
+  ]) {
+    const leg = new THREE.Mesh(new THREE.BoxGeometry(0.12, 0.78, 0.12), legDark);
+    leg.position.set(x, 0.39, z);
+    group.add(leg);
   }
 
-  // Kitchen: counter
-  box(dark, 12, 0.95, 0.7, 11.5, 0.48, -14.4);
+  // ---- pass-through seats (no collider — you sit ON them)
 
-  // Conservatory: windows onto the city, and a couple of plants
-  for (const z of [0, 4, 8]) box(glass, 0.12, 2.2, 3.4, -19.7, 1.5, z);
-  box(dark, 0.5, 0.5, 0.5, -16.5, 0.25, 11);
-
-  // Ballroom: the bar
-  box(wood, 5, 1.05, 0.8, -8.2, 0.52, -4.4);
-
-  // Dining: the long table, on its legs
-  box(cloth, 6.5, 0.08, 2.6, 12.5, 0.78, 4);
-  for (const [x, z] of [
-    [9.7, 3],
-    [15.3, 3],
-    [9.7, 5],
-    [15.3, 5],
-  ])
-    box(dark, 0.12, 0.78, 0.12, x, 0.39, z);
-
-  // A dining chair, seat facing (faceX, faceZ). Matches the SIT anchors so a
-  // seated guest lands on the cushion rather than hovering beside it.
+  // A dining chair, seat facing (faceX, faceZ), matching the SIT anchors.
   const chair = (x: number, z: number, faceX: number, faceZ: number) => {
     const c = new THREE.Group();
     c.position.set(x, 0, z);
     c.rotation.y = Math.atan2(faceX - x, faceZ - z); // +z local points at the table
-    const seat = new THREE.Mesh(new THREE.BoxGeometry(0.5, 0.08, 0.5), wood);
+    const seat = new THREE.Mesh(new THREE.BoxGeometry(0.5, 0.08, 0.5), chairWood);
     seat.position.y = 0.46;
     seat.castShadow = true;
     seat.receiveShadow = true;
     c.add(seat);
     const back = new THREE.Mesh(new THREE.BoxGeometry(0.5, 0.5, 0.08), cloth);
-    back.position.set(0, 0.72, -0.24); // behind the sitter
+    back.position.set(0, 0.72, -0.24);
     back.castShadow = true;
     c.add(back);
     for (const [lx, lz] of [
@@ -229,24 +222,23 @@ export function buildFurniture(scene: THREE.Scene) {
       [-0.21, 0.21],
       [0.21, 0.21],
     ]) {
-      const leg = new THREE.Mesh(new THREE.BoxGeometry(0.06, 0.46, 0.06), dark);
+      const leg = new THREE.Mesh(new THREE.BoxGeometry(0.06, 0.46, 0.06), legDark);
       leg.position.set(lx, 0.23, lz);
       c.add(leg);
     }
     group.add(c);
   };
 
-  chair(9.4, 3, 12.5, 4);
-  chair(9.4, 5, 12.5, 4);
-  chair(15.6, 3, 12.5, 4);
-  chair(15.6, 5, 12.5, 4);
+  chair(8.6, 3.4, 12.5, 4);
+  chair(8.6, 4.6, 12.5, 4);
+  chair(16.4, 3.4, 12.5, 4);
+  chair(16.4, 4.6, 12.5, 4);
 
-  // A couch against the east wall, seat facing west — the din-couch anchors sit here.
-  // Cushion top sits at ~0.5, matching the chairs, so a seated guest (whose
-  // hips drop to ~0.48) rests on it rather than hovering above or sinking in.
+  // A couch against the east wall, seat facing west — the din-couch anchors sit
+  // here. Cushion top ~0.5, matching the chairs, so a seated guest rests on it.
   const couch = new THREE.Group();
   couch.position.set(19.1, 0, 10);
-  couch.rotation.y = -Math.PI / 2; // local +z faces west, into the room
+  couch.rotation.y = -Math.PI / 2;
   const cushion = new THREE.Mesh(new THREE.BoxGeometry(4, 0.32, 1.0), cloth);
   cushion.position.set(0, 0.34, 0);
   cushion.castShadow = true;
@@ -264,8 +256,12 @@ export function buildFurniture(scene: THREE.Scene) {
   }
   group.add(couch);
 
-  // Entrance Hall: a console table by the door
-  box(wood, 2.2, 0.8, 0.5, 3, 0.4, 14.4);
+  // ---- decoration with no collider: the conservatory windows onto the city
+  for (const z of [0, 4, 8]) {
+    const win = new THREE.Mesh(new THREE.BoxGeometry(0.12, 2.2, 3.4), glass);
+    win.position.set(-19.7, 1.5, z);
+    group.add(win);
+  }
 }
 
 /** Floating room names, so it's obvious the floor plan is real. */

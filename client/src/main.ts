@@ -332,6 +332,25 @@ function tick() {
       const solved = resolveCollisions(localPos.x + dx, localPos.z + dz);
       localPos.x = solved.x;
       localPos.z = solved.z;
+
+      // Predict body-to-body collision too, using the rendered positions of the
+      // others, so bumping into a guest feels solid instead of rubber-banding
+      // as the server pushes back. The server is still the authority.
+      const minSep = 0.84;
+      bodies.forEach((other, id) => {
+        if (id === myBody) return;
+        const ox = localPos.x - other.rig.group.position.x;
+        const oz = localPos.z - other.rig.group.position.z;
+        const od = Math.hypot(ox, oz);
+        if (od < minSep && od > 1e-3) {
+          localPos.x = other.rig.group.position.x + (ox / od) * minSep;
+          localPos.z = other.rig.group.position.z + (oz / od) * minSep;
+        }
+      });
+      const reSolved = resolveCollisions(localPos.x, localPos.z);
+      localPos.x = reSolved.x;
+      localPos.z = reSolved.z;
+
       localYaw = Math.atan2(dx, dz);
     }
 

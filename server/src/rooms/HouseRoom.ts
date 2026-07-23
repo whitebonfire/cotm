@@ -1,6 +1,6 @@
 import { Room, Client } from "@colyseus/core";
 import { HouseState, Person } from "../schema/GameState.js";
-import { Action, HOUSE, SPEED, resolveCollisions, roomAt } from "../world/house.js";
+import { Action, HOUSE, PLAYER_RADIUS, SPEED, resolveCollisions, roomAt } from "../world/house.js";
 import { ANCHORS } from "../world/nav.js";
 import { NpcBrain, randomLook, randomName } from "../ai/npc.js";
 
@@ -251,6 +251,73 @@ export class HouseRoom extends Room<HouseState> {
     for (const [bodyId, brain] of this.brains) {
       if (this.driverOf.has(bodyId)) continue;
       brain.update(dt);
+    }
+
+    this.separateBodies();
+  }
+
+  /**
+   * Keep bodies out of each other. Guests shouldn't overlap or walk through one
+   * another. The MOVING body yields to the still one — a walker steps around
+   * someone who's reading or seated, rather than shoving them off their spot.
+   */
+  private separateBodies() {
+    const min = PLAYER_RADIUS * 2;
+    const people = [...this.state.people.entries()];
+
+    for (let iter = 0; iter < 2; iter++) {
+      for (let i = 0; i < people.length; i++) {
+        for (let j = i + 1; j < people.length; j++) {
+          const a = people[i][1];
+          const b = people[j][1];
+
+          let dx = b.x - a.x;
+          let dz = b.z - a.z;
+          let dist = Math.hypot(dx, dz);
+          if (dist >= min) continue;
+
+          if (dist < 1e-4) {
+            // Exactly stacked — nudge along X rather than divide by zero.
+            dx = 1;
+            dz = 0;
+            dist = 1;
+          }
+
+          const overlap = min - dist;
+          const nx = dx / dist;
+          const nz = dz / dist;
+
+          // Only bodies that are walking get pushed; stationary ones hold their
+          // ground. If both are walking, they split the difference.
+          const aMoves = a.action === Action.WALK;
+          const bMoves = b.action === Action.WALK;
+          let aShare = 0;
+          let bShare = 0;
+          if (aMoves && bMoves) {
+            aShare = bShare = 0.5;
+          } else if (aMoves) {
+            aShare = 1;
+          } else if (bMoves) {
+            bShare = 1;
+          } else {
+            // Neither is walking (rare — anchors are spaced apart). Split it so
+            // they don't stay interpenetrating.
+            aShare = bShare = 0.5;
+          }
+
+          a.x -= nx * overlap * aShare;
+          a.z -= nz * overlap * aShare;
+          b.x += nx * overlap * bShare;
+          b.z += nz * overlap * bShare;
+        }
+      }
+    }
+
+    // A separation push can shove someone into a wall or a table; put them back.
+    for (const [, p] of people) {
+      const solved = resolveCollisions(p.x, p.z);
+      p.x = clamp(solved.x, HOUSE.x1, HOUSE.x2);
+      p.z = clamp(solved.z, HOUSE.z1, HOUSE.z2);
     }
   }
 }

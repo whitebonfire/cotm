@@ -98,6 +98,8 @@ export class NpcBrain {
   private path: Array<{ x: number; z: number }> = [];
   private anchor: Anchor | null = null;
   private dwell = 0;
+  /** Seconds spent walking without making progress — for stuck-recovery. */
+  private stuck = 0;
 
   /**
    * @param claimed Anchors already taken, so two bodies don't stand inside
@@ -177,6 +179,7 @@ export class NpcBrain {
 
     if (dist < 0.35) {
       this.path.shift();
+      this.stuck = 0;
       if (this.path.length === 0) {
         // Arrived. Settle in.
         const action = this.anchor?.action ?? Action.IDLE;
@@ -190,10 +193,27 @@ export class NpcBrain {
     const stepX = (dx / dist) * SPEED * dt;
     const stepZ = (dz / dist) * SPEED * dt;
 
+    const fromX = this.person.x;
+    const fromZ = this.person.z;
     const solved = resolveCollisions(this.person.x + stepX, this.person.z + stepZ);
     this.person.x = solved.x;
     this.person.z = solved.z;
     this.person.yaw = Math.atan2(stepX, stepZ);
     this.person.action = Action.WALK;
+
+    // Stuck-recovery: if a body is trying to walk but barely moving — jammed
+    // against furniture it can't slide past, or shoved by another guest — give
+    // up on this destination and pick a new one, instead of walking on the spot
+    // inside a table forever.
+    const progressed = Math.hypot(this.person.x - fromX, this.person.z - fromZ);
+    if (progressed < SPEED * dt * 0.25) {
+      this.stuck += dt;
+      if (this.stuck > 0.8) {
+        this.stuck = 0;
+        this.release(); // drop the destination; next update() picks a fresh one
+      }
+    } else {
+      this.stuck = 0;
+    }
   }
 }

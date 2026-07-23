@@ -16,6 +16,7 @@ import {
   roomAt,
 } from "../dist/server/world/house.js";
 import { ANCHORS, GRAPH, findDoorPath } from "../dist/server/world/nav.js";
+import { SOLIDS, resolveAgainstSolids } from "../dist/server/world/furniture.js";
 
 const results = [];
 const check = (name, pass, detail = "") => {
@@ -172,6 +173,39 @@ for (const from of ROOMS) {
   }
 }
 check("every room can be routed to from every other room", noRoute === 0, `${noRoute} broken pairs`);
+
+// ---- furniture: a body standing at an anchor must not be inside a solid, or
+// it gets ejected the moment it arrives.
+let anchorInSolid = 0;
+for (const anchor of ANCHORS) {
+  const solved = resolveAgainstSolids(anchor.x, anchor.z, PLAYER_RADIUS);
+  if (Math.hypot(solved.x - anchor.x, solved.z - anchor.z) > 1e-6) {
+    anchorInSolid++;
+    console.log(`         ${anchor.id} sits inside a solid`);
+  }
+}
+check("no anchor is inside a solid piece of furniture", anchorInSolid === 0, `${anchorInSolid} of ${ANCHORS.length}`);
+
+// Spawns too.
+let spawnInSolid = 0;
+for (const s of SPAWNS) {
+  const solved = resolveAgainstSolids(s.x, s.z, PLAYER_RADIUS);
+  if (Math.hypot(solved.x - s.x, solved.z - s.z) > 1e-6) spawnInSolid++;
+}
+check("no spawn is inside a solid", spawnInSolid === 0, `${spawnInSolid} of ${SPAWNS.length}`);
+
+// Furniture must actually block: a body walking into the middle of each solid
+// gets pushed back out.
+let leaky = 0;
+for (const s of SOLIDS) {
+  const solved = resolveAgainstSolids(s.cx, s.cz, PLAYER_RADIUS);
+  const pushed = Math.hypot(solved.x - s.cx, solved.z - s.cz);
+  if (pushed < PLAYER_RADIUS) {
+    leaky++;
+    console.log(`         ${s.id} does not push a body out of its centre`);
+  }
+}
+check("every solid ejects a body from its interior", leaky === 0, `${leaky} of ${SOLIDS.length}`);
 
 const failed = results.filter((r) => !r.pass);
 console.log(`\n${results.length - failed.length}/${results.length} passed`);
