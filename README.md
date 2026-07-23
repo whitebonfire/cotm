@@ -40,15 +40,28 @@ Then open <http://localhost:5173>. Open it twice to see both players.
 
 `npm run dev` runs two processes: the game server on `:2567` and Vite on `:5173` with hot reload. The client points at `localhost:2567` automatically in dev.
 
-### Live AI answers (optional)
+### Live AI conversation
 
-Interview answers are written live by Claude when an API key is present, and by
-an authored fallback otherwise — so the game runs fully either way. To turn on
-live generation:
+Interview replies are written live by Claude. There are two ways it connects,
+picked automatically:
 
-```bash
-export ANTHROPIC_API_KEY=sk-ant-...
-```
+1. **The local `claude` CLI** (Claude Code). If you're logged into Claude Code,
+   the server drives the CLI for you — **no API key needed**. This is the
+   zero-setup path for local play.
+2. **The Anthropic API**, if `ANTHROPIC_API_KEY` is set (needed for a deployed
+   server, where the CLI isn't available):
+
+   ```bash
+   export ANTHROPIC_API_KEY=sk-ant-...   # or put it in .env
+   ```
+
+If neither is available it falls back to authored in-character lines. The server
+logs which one it's using at startup (`interviews: LIVE — …` or `AUTHORED
+FALLBACK`). Force a provider with `COTM_AI_PROVIDER=api|cli|off`.
+
+Every reply is kept clean: the prompt forbids profanity and crude content, and a
+server-side guard drops anything that slips through (replacing it with a clean
+authored line), so a bad word can't reach the screen.
 
 The server uses Haiku (`COTM_MODEL` overrides it) with a hard timeout that
 falls back to authored in-voice deflections, so a slow or failed call never
