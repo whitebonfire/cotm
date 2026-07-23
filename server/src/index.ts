@@ -5,6 +5,7 @@ import express from "express";
 import { Server } from "@colyseus/core";
 import { WebSocketTransport } from "@colyseus/ws-transport";
 import { HouseRoom } from "./rooms/HouseRoom.js";
+import { LIVE_ENABLED } from "./ai/llm.js";
 
 const PORT = Number(process.env.PORT) || 2567;
 
@@ -35,6 +36,11 @@ gameServer.define("house", HouseRoom);
 gameServer.listen(PORT).then(() => {
   console.log(`[cotm] listening on :${PORT}`);
   console.log(`[cotm] serving client from ${publicDir}`);
+  if (LIVE_ENABLED) {
+    console.log(`[cotm] interviews: LIVE — answers written by ${process.env.COTM_MODEL || "claude-haiku-4-5-20251001"}`);
+  } else {
+    console.log(`[cotm] interviews: AUTHORED FALLBACK — no ANTHROPIC_API_KEY set, so NPC replies are canned. Add a key to .env for live conversation.`);
+  }
 });
 
 // Render sends SIGTERM on deploy. Let rooms drain instead of dropping players.
