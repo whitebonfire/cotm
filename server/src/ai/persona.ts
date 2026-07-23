@@ -243,7 +243,7 @@ export const ANSWER_CAP = 180;
  * voice. Live AI is what makes the conversation real; this just keeps it from
  * ever going silent.
  */
-type Intent = "greeting" | "whyhere" | "who" | "accuse" | "deflect";
+type Intent = "greeting" | "whyhere" | "who" | "accuse" | "demand" | "deflect";
 
 function intentOf(q: string): Intent {
   q = q.toLowerCase().trim();
@@ -254,6 +254,8 @@ function intentOf(q: string): Intent {
     /\b(you )?(alright|ok|okay)\??$/.test(q) ||
     q.length <= 3;
   if (isGreeting) return "greeting";
+  if (/\b(gimme|give me|hand (it |me |over)|pass me|lend me|steal|take your|can i (have|hold|see|borrow)|let me (have|hold|see|borrow))\b/.test(q))
+    return "demand";
   if (/\b(why|what).*(here|come|party|tonight|attend)|bring you/.test(q)) return "whyhere";
   if (/\b(who are you|your name|what.*do|your job|occupation)\b/.test(q)) return "who";
   if (/\b(spy|lying|lie|suspicious|hiding|hide|guilty|did you)\b/.test(q)) return "accuse";
@@ -296,7 +298,9 @@ export function authoredReply(
           ? WHO[v](persona.tie, persona.job)
           : intent === "accuse"
             ? ACCUSED[v]()
-            : DEFLECT[v]();
+            : intent === "demand"
+              ? DEMAND[v]()
+              : DEFLECT[v]();
 
   // Don't say the exact thing they just said.
   const fresh = base.filter((o) => scrub(o) !== lastGuest);
@@ -364,12 +368,40 @@ const ACCUSED: Record<Voice, () => string[]> = {
 };
 
 const DEFLECT: Record<Voice, () => string[]> = {
-  terse: () => [`cant say`, `no idea`, `hm`],
-  rambling: () => [`oh, thats a funny one, i'm not sure really, i was just thinking about something else entirely, what were we saying`],
-  sloppy: () => [`dunno really. good question tho`],
-  drunk: () => [`no idea what you mean. is there more wine going round`],
-  formal: () => [`I'm not certain I follow your meaning.`],
-  guarded: () => [`why do you want to know that`],
-  flustered: () => [`oh, um, i'm not, sorry, i dont really know what to say to that`],
-  articulate: () => [`That's a curious thing to ask. I'm not sure I have a good answer for you.`],
+  terse: () => [`cant say`, `no idea`, `hm`, `couldnt tell you`, `not sure`],
+  rambling: () => [
+    `oh, thats a funny one, i'm not sure really, i was just thinking about something else, what were we saying`,
+    `hm, hard to say, my minds all over the place tonight, have you tried the little pastries`,
+    `well now, thats got me thinking, though i couldnt tell you honestly, its been a long evening`,
+  ],
+  sloppy: () => [`dunno really. good question tho`, `couldnt say mate`, `no clue honestly`, `beats me`],
+  drunk: () => [
+    `no idea what you mean. is there more wine going round`,
+    `HA. couldnt tell you. wheres the bar`,
+    `youve lost me completely, friend. drink?`,
+  ],
+  formal: () => [`I'm not certain I follow your meaning.`, `I couldn't say, I'm afraid.`, `A peculiar question. I've no answer for it.`],
+  guarded: () => [`why do you want to know that`, `and what business is that of yours`, `i don't see why i'd tell you`],
+  flustered: () => [
+    `oh, um, i'm not, sorry, i dont really know what to say to that`,
+    `oh gosh, i, that's, i'm not sure, sorry`,
+    `um, i, i couldnt really, sorry, no`,
+  ],
+  articulate: () => [
+    `That's a curious thing to ask. I'm not sure I have a good answer for you.`,
+    `Hm. You do ask the strangest things. I couldn't tell you.`,
+    `I'm afraid you've rather stumped me there.`,
+  ],
+};
+
+/** A refusal, in voice, when the Detective demands something (your watch, etc.). */
+const DEMAND: Record<Voice, () => string[]> = {
+  terse: () => [`no`, `get your own`, `not a chance`],
+  rambling: () => [`oh, my, no, i couldnt possibly, its rather sentimental you see, family piece and all that, sorry`],
+  sloppy: () => [`nah. get your own mate`, `haha no`, `not happening`],
+  drunk: () => [`HA! buy your OWN. this ones mine`, `my what? cheeky. no`],
+  formal: () => [`Certainly not.`, `I think not.`, `Absolutely out of the question.`],
+  guarded: () => [`why would i give you that`, `and why should i`, `i don't think so`],
+  flustered: () => [`oh, i, no, sorry, i couldnt, why would you, no`, `what?? no, i, sorry, no`],
+  articulate: () => [`I think not, but nice try.`, `Absolutely not, though I admire the nerve.`],
 };
