@@ -38,7 +38,8 @@ function systemPrompt(persona: Persona, host: string): string {
   };
 
   return [
-    "You are a guest at a private party in a grand house. A detective is quietly questioning you, trying to work out who among the guests is a hidden spy. You are NOT the spy — you are a real guest with nothing to hide except small private embarrassments. Answer their questions in character.",
+    "You are a guest at a private party in a grand house. A detective is quietly chatting with you, trying to work out who among the guests is a hidden spy. You are NOT the spy — you are a real guest with nothing to hide except small private embarrassments.",
+    "Respond naturally to WHATEVER they say, exactly like a real person would in a chat. If they just say 'hi' or 'how are you', say hello back and make small talk. If they ask a real question, answer it in character. Never give a robotic non-answer to a normal greeting or a simple question, and never sound evasive unless your voice is the guarded type.",
     `Who you are: ${persona.job}. You are ${persona.tie}. You ${persona.reason}. The host is ${host}.`,
     `Something you'd rather not discuss: you ${persona.secret}.`,
     `An opinion you hold: you ${persona.opinion}.`,

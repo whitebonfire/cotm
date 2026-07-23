@@ -244,15 +244,26 @@ export const ANSWER_CAP = 320;
  * ever going silent.
  */
 export function authoredReply(name: string, persona: Persona, host: string, question: string): string {
-  const q = question.toLowerCase();
+  const q = question.toLowerCase().trim();
   const tie = persona.tie;
   const job = persona.job;
+
+  // A greeting or small talk must get a NATURAL reply — an NPC that answers "hi"
+  // with a robotic non-answer looks more suspicious than any human, which
+  // inverts the whole game. A real guest just says hello back.
+  const isGreeting =
+    /^(hi|hey+|hello+|yo|hiya|howdy|sup|heya|ello|oi)\b/.test(q) ||
+    /\b(good )?(evening|morning|afternoon)\b/.test(q) ||
+    /\bhow('?s| is| are)\b.*\b(you|it going|things|the (party|evening))\b/.test(q) ||
+    /\b(you )?(alright|ok|okay)\??$/.test(q) ||
+    q.length <= 3;
 
   const asksWhyHere = /\b(why|what).*(here|come|party|tonight|attend)|bring you/.test(q);
   const asksWho = /\b(who are you|your name|what.*do|your job|occupation)\b/.test(q);
   const asksAccuse = /\b(spy|lying|lie|suspicious|hiding|hide|guilty|did you)\b/.test(q);
 
   const pool = (): string[] => {
+    if (isGreeting) return GREETING[persona.voice]();
     if (asksWhyHere) return WHY_HERE[persona.voice](tie, job, host);
     if (asksWho) return WHO[persona.voice](tie, job);
     if (asksAccuse) return ACCUSED[persona.voice]();
@@ -261,6 +272,18 @@ export function authoredReply(name: string, persona: Persona, host: string, ques
 
   return scrub(pick(pool()));
 }
+
+/** Natural greetings, in voice — what a real guest says back to "hi". */
+const GREETING: Record<Voice, () => string[]> = {
+  terse: () => [`evening`, `hello`, `hi`],
+  rambling: () => [`oh, hello! lovely to, well, are you enjoying the party, i keep losing track of everyone`],
+  sloppy: () => [`hey. hows it going`, `hi there`, `evening`],
+  drunk: () => [`HELLO friend. come to have a drink with me`, `evenin! good to see a friendly face`],
+  formal: () => [`Good evening.`, `Hello. A pleasure.`],
+  guarded: () => [`hello. do i know you?`, `evening. was there something you wanted`],
+  flustered: () => [`oh! hi, hello, sorry, um, hi`, `oh, hello, you startled me`],
+  articulate: () => [`Hello there. Enjoying the evening?`, `Good evening. Lovely party, isn't it.`],
+};
 
 type Lines = (a?: string, b?: string, c?: string) => string[];
 
