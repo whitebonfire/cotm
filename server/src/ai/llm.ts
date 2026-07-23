@@ -65,7 +65,7 @@ export interface ChatTurn {
 // caller uses the clean authored line instead. Mild ones included on purpose —
 // these are refined guests.
 const BANNED =
-  /\b(hell|damn(ed)?|bloody|crap|ass|arse|asshole|bastard|bitch|shit|piss|dick|cock|f+u+c+k+|cunt|slut|whore|goddamn|prick|wank|bollocks|twat)\b/i;
+  /\b(hell|damn(ed)?|bloody|crap|ass|arse|asshole|bastard|bitch|shit|piss|dick|cock|f+u+c+k+|cunt|slut|whore|goddamn|gods?|jesus|christs?|prick|wank|bollocks|twat)\b/i;
 
 function isClean(text: string): boolean {
   return !BANNED.test(text);
@@ -100,7 +100,7 @@ function systemPrompt(persona: Persona, host: string): string {
     `An opinion you hold: you ${persona.opinion}.`,
     `Your writing voice — keep it consistent every reply: ${voiceGuide[persona.voice]}`,
     `Keep it SHORT — one or two brief sentences at most, like a quick text message. Never a paragraph. Reply in first person, just your message. Stay consistent with anything you've already said. Hard limit ${ANSWER_CAP} characters.`,
-    "KEEP IT CLEAN: no profanity, swearing, slurs, insults, or crude, sexual, or violent content of any kind — not even mild words like 'hell' or 'damn'. These are refined, well-mannered guests at an elegant evening. Even the drunk guest is jovial and loud, never coarse.",
+    "KEEP IT CLEAN: no profanity, swearing, slurs, insults, or crude, sexual, or violent content of any kind — not even mild words like 'hell' or 'damn', and no religious exclamations like 'god', 'oh my god', or 'jesus'. Use 'goodness', 'heavens', 'my word' and the like instead. These are refined, well-mannered guests at an elegant evening. Even the drunk guest is jovial and loud, never coarse.",
     "HARD RULES: no em-dashes or en-dashes. No semicolons. Do not end on a tidy summary sentence. Do not be more polished than your voice allows. Never mention being an AI, a model, a character, or a game.",
   ].join("\n");
 }
