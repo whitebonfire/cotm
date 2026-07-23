@@ -2,7 +2,8 @@ import { Room, Client } from "@colyseus/core";
 import { HouseState, Person } from "../schema/GameState.js";
 import { Action, HOUSE, PLAYER_RADIUS, SPEED, resolveCollisions, roomAt } from "../world/house.js";
 import { ANCHORS } from "../world/nav.js";
-import { NpcBrain, randomLook, randomName } from "../ai/npc.js";
+import { NpcBrain, randomLook } from "../ai/npc.js";
+import { drawNames } from "../ai/names.js";
 import {
   assignVoices,
   generatePersona,
@@ -357,8 +358,10 @@ export class HouseRoom extends Room<HouseState> {
 
   /** Fill the house with guests, each with a persona and a writing voice. */
   private populate() {
-    const names = new Set<string>();
     const spots = [...ANCHORS].sort(() => Math.random() - 0.5);
+    // Names come from a pool the AI keeps topped up, so they aren't canned and
+    // no two guests share a first name (drawNames; procedural fallback if off).
+    const names = drawNames(PARTY_SIZE);
     // Voices are dealt across the whole party and re-rolled each round, so the
     // writing spread holds and no player learns "the drunk is never the Spy".
     const voices = assignVoices(PARTY_SIZE);
@@ -368,7 +371,7 @@ export class HouseRoom extends Room<HouseState> {
       const person = new Person();
       const look = randomLook();
 
-      person.name = randomName(names);
+      person.name = names[i];
       Object.assign(person, look);
 
       const spot = spots[i % spots.length];

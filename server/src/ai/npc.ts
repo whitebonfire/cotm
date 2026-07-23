@@ -2,18 +2,6 @@ import { Person } from "../schema/GameState.js";
 import { Action, SPEED, resolveCollisions, roomAt } from "../world/house.js";
 import { ANCHORS, routeTo, type Anchor } from "../world/nav.js";
 
-const FIRST = [
-  "Margot", "Cecily", "Rupert", "Iris", "Desmond", "Vivian", "Nigel", "Perdita",
-  "Ambrose", "Rosalind", "Clive", "Beatrix", "Hugo", "Winifred", "Lionel", "Constance",
-  "Barnaby", "Ottoline", "Gerald", "Sylvia", "Quentin", "Harriet", "Alaric", "Dorothy",
-];
-
-const LAST = [
-  "Ashcombe", "Bellweather", "Crane", "Dunmore", "Ellery", "Fairholt", "Grieve",
-  "Harrowgate", "Ives", "Larkspur", "Mowbray", "Quill", "Ravensworth", "Sable",
-  "Thorne", "Vaughan", "Wren", "Yarrow",
-];
-
 /** Accessory ids. Some of these become Spy targets at milestone 7. */
 export const ACC = {
   NONE: 0,
@@ -76,16 +64,6 @@ export function randomLook(): NpcLook {
   };
 }
 
-export function randomName(used: Set<string>): string {
-  for (let i = 0; i < 200; i++) {
-    const name = `${pick(FIRST)} ${pick(LAST)}`;
-    if (!used.has(name)) {
-      used.add(name);
-      return name;
-    }
-  }
-  return `Guest ${used.size + 1}`;
-}
 
 /**
  * One NPC's head.
