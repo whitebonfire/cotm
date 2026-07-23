@@ -98,10 +98,16 @@ export class HouseRoom extends Room<HouseState> {
       const anchor = this.nearestAnchor(person.x, person.z);
       if (!anchor) return;
 
+      // Snap onto the spot itself, not wherever you happened to press E. The
+      // anchor is exactly where an NPC would stand, which for a seat means ON
+      // the cushion — without this you sit in mid-air a metre off the couch.
+      // The client predicts to the same place, so it glides you onto the seat.
+      person.x = anchor.x;
+      person.z = anchor.z;
       this.held.set(client.sessionId, anchor.action);
       person.action = anchor.action;
       if (anchor.faceX !== undefined && anchor.faceZ !== undefined) {
-        person.yaw = Math.atan2(anchor.faceX - person.x, anchor.faceZ - person.z);
+        person.yaw = Math.atan2(anchor.faceX - anchor.x, anchor.faceZ - anchor.z);
       }
     });
 

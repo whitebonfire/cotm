@@ -73,8 +73,8 @@ export const ANCHORS: Anchor[] = [
   { id: "din-sit-4", room: "dining", x: 15.6, z: 5, action: Action.SIT, faceX: 12.5, faceZ: 4 },
   { id: "din-drink-1", room: "dining", x: 12.5, z: 1.2, action: Action.DRINK, faceX: 12.5, faceZ: 4 },
   { id: "din-drink-2", room: "dining", x: 12.5, z: 6.8, action: Action.DRINK, faceX: 12.5, faceZ: 4 },
-  { id: "din-couch-1", room: "dining", x: 18.4, z: 9, action: Action.SIT, faceX: 15, faceZ: 9 },
-  { id: "din-couch-2", room: "dining", x: 18.4, z: 11, action: Action.SIT, faceX: 15, faceZ: 11 },
+  { id: "din-couch-1", room: "dining", x: 18.9, z: 9, action: Action.SIT, faceX: 15, faceZ: 9 },
+  { id: "din-couch-2", room: "dining", x: 18.9, z: 11, action: Action.SIT, faceX: 15, faceZ: 11 },
   { id: "din-talk-1", room: "dining", x: 9, z: 11.5, action: Action.TALK, faceX: 10.2, faceZ: 11.5 },
   { id: "din-talk-2", room: "dining", x: 11.4, z: 11.5, action: Action.TALK, faceX: 10.2, faceZ: 11.5 },
 

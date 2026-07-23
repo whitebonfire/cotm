@@ -242,21 +242,23 @@ export function buildFurniture(scene: THREE.Scene) {
   chair(15.6, 5, 12.5, 4);
 
   // A couch against the east wall, seat facing west — the din-couch anchors sit here.
+  // Cushion top sits at ~0.5, matching the chairs, so a seated guest (whose
+  // hips drop to ~0.48) rests on it rather than hovering above or sinking in.
   const couch = new THREE.Group();
   couch.position.set(19.1, 0, 10);
   couch.rotation.y = -Math.PI / 2; // local +z faces west, into the room
-  const cushion = new THREE.Mesh(new THREE.BoxGeometry(4, 0.35, 1.0), cloth);
-  cushion.position.set(0, 0.42, 0);
+  const cushion = new THREE.Mesh(new THREE.BoxGeometry(4, 0.32, 1.0), cloth);
+  cushion.position.set(0, 0.34, 0);
   cushion.castShadow = true;
   cushion.receiveShadow = true;
   couch.add(cushion);
-  const cback = new THREE.Mesh(new THREE.BoxGeometry(4, 0.7, 0.28), cloth);
-  cback.position.set(0, 0.75, -0.42);
+  const cback = new THREE.Mesh(new THREE.BoxGeometry(4, 0.6, 0.28), cloth);
+  cback.position.set(0, 0.62, -0.42);
   cback.castShadow = true;
   couch.add(cback);
   for (const ax of [-2.05, 2.05]) {
-    const arm = new THREE.Mesh(new THREE.BoxGeometry(0.28, 0.55, 1.0), cloth);
-    arm.position.set(ax, 0.5, 0);
+    const arm = new THREE.Mesh(new THREE.BoxGeometry(0.28, 0.5, 1.0), cloth);
+    arm.position.set(ax, 0.42, 0);
     arm.castShadow = true;
     couch.add(arm);
   }

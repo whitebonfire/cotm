@@ -149,9 +149,18 @@ const readAction = await actHere();
 check("a player can take a book from the shelf and read", readAction === ACT.READ, `action=${readAction} (want ${ACT.READ})`);
 await actHere(); // stand back up
 
-await navigateTo(18.4, 9); // the dining couch (a SIT anchor)
+// Stand roughly a metre short of the couch anchor (18.9, 9) and sit. The body
+// must SNAP onto the seat, not sit floating where it was standing.
+await navigateTo(17.6, 9);
+const beforeSit = { x: body().x, z: body().z };
 const sitAction = await actHere();
+const seated = body();
 check("a player can sit down on the furniture", sitAction === ACT.SIT, `action=${sitAction} (want ${ACT.SIT})`);
+check(
+  "sitting snaps you onto the seat, not the air where you stood",
+  Math.hypot(seated.x - 18.9, seated.z - 9) < 0.05 && Math.hypot(beforeSit.x - 18.9, beforeSit.z - 9) > 0.6,
+  `stood at (${beforeSit.x.toFixed(2)},${beforeSit.z.toFixed(2)}), landed at (${seated.x.toFixed(2)},${seated.z.toFixed(2)})`
+);
 await actHere(); // stand back up
 
 // Back to a clear stretch for the movement/speed/wall tests below: the
