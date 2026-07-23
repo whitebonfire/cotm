@@ -242,20 +242,20 @@ export class Tablet {
   }
 
   private rosterRows(interview: boolean): string {
+    // The roster is everyone but you (main filters your body out) — you can't
+    // question or accuse yourself, so there's no self row to disable.
     return this.roster
       .map((e) => {
         const swatch = `#${new THREE.Color(SKINS[e.skin % SKINS.length]).getHexString()}`;
-        const you = e.id === this.myId ? ` <em>(you)</em>` : "";
         const detail = [AGE_NAME[e.age] ?? "", e.acc ? `with ${ACC_NAME[e.acc]}` : ""]
           .filter(Boolean)
           .join(", ");
-        const self = e.id === this.myId;
         const btn = interview
-          ? `<button data-interview="${e.id}" ${self ? "disabled" : ""}>Interview</button>`
+          ? `<button data-interview="${e.id}">Interview</button>`
           : `<button disabled>Accuse</button>`;
         return `<li>
             <span class="face" style="background:${swatch}"></span>
-            <span class="who"><b>${e.name}</b>${you}<span class="detail">${detail}</span></span>
+            <span class="who"><b>${e.name}</b><span class="detail">${detail}</span></span>
             ${btn}
           </li>`;
       })

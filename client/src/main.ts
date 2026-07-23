@@ -153,10 +153,13 @@ renderer.domElement.addEventListener("click", () => {
   if (room && !locked && !tablet.up) renderer.domElement.requestPointerLock();
 });
 
-/** Rebuild the roster from whoever's currently at the party. */
+/** Rebuild the roster from whoever's currently at the party — everyone but you.
+ *  You can't interview or accuse yourself, so your own body has no place on the
+ *  list. */
 function refreshRoster() {
   const entries: RosterEntry[] = [];
   bodies.forEach((body, id) => {
+    if (id === myBody) return;
     entries.push({
       id,
       name: body.person.name,
