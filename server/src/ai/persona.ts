@@ -243,35 +243,78 @@ export const ANSWER_CAP = 320;
  * voice. Live AI is what makes the conversation real; this just keeps it from
  * ever going silent.
  */
-export function authoredReply(name: string, persona: Persona, host: string, question: string): string {
-  const q = question.toLowerCase().trim();
-  const tie = persona.tie;
-  const job = persona.job;
+type Intent = "greeting" | "whyhere" | "who" | "accuse" | "deflect";
 
-  // A greeting or small talk must get a NATURAL reply — an NPC that answers "hi"
-  // with a robotic non-answer looks more suspicious than any human, which
-  // inverts the whole game. A real guest just says hello back.
+function intentOf(q: string): Intent {
+  q = q.toLowerCase().trim();
   const isGreeting =
     /^(hi|hey+|hello+|yo|hiya|howdy|sup|heya|ello|oi)\b/.test(q) ||
     /\b(good )?(evening|morning|afternoon)\b/.test(q) ||
     /\bhow('?s| is| are)\b.*\b(you|it going|things|the (party|evening))\b/.test(q) ||
     /\b(you )?(alright|ok|okay)\??$/.test(q) ||
     q.length <= 3;
-
-  const asksWhyHere = /\b(why|what).*(here|come|party|tonight|attend)|bring you/.test(q);
-  const asksWho = /\b(who are you|your name|what.*do|your job|occupation)\b/.test(q);
-  const asksAccuse = /\b(spy|lying|lie|suspicious|hiding|hide|guilty|did you)\b/.test(q);
-
-  const pool = (): string[] => {
-    if (isGreeting) return GREETING[persona.voice]();
-    if (asksWhyHere) return WHY_HERE[persona.voice](tie, job, host);
-    if (asksWho) return WHO[persona.voice](tie, job);
-    if (asksAccuse) return ACCUSED[persona.voice]();
-    return DEFLECT[persona.voice]();
-  };
-
-  return scrub(pick(pool()));
+  if (isGreeting) return "greeting";
+  if (/\b(why|what).*(here|come|party|tonight|attend)|bring you/.test(q)) return "whyhere";
+  if (/\b(who are you|your name|what.*do|your job|occupation)\b/.test(q)) return "who";
+  if (/\b(spy|lying|lie|suspicious|hiding|hide|guilty|did you)\b/.test(q)) return "accuse";
+  return "deflect";
 }
+
+/**
+ * Authored reply to an arbitrary typed question — the no-key / timeout fallback.
+ *
+ * History-aware so it isn't robotic: it never repeats its own last line word for
+ * word, and if the Detective asks the same kind of question again it says so, in
+ * voice ("i just told you…"), the way a real guest would. An NPC that parrots
+ * itself verbatim would be the one thing that outs it — and let the Detective
+ * catch every NPC just by asking twice. (Live AI handles all of this naturally,
+ * since it gets the full conversation; this only has to be good enough.)
+ */
+export function authoredReply(
+  name: string,
+  persona: Persona,
+  host: string,
+  question: string,
+  history: Array<{ role: "detective" | "guest"; text: string }> = []
+): string {
+  const q = question.toLowerCase().trim();
+  const v = persona.voice;
+  const intent = intentOf(q);
+
+  const priorDetective = history.slice(0, -1).filter((t) => t.role === "detective");
+  const repeated =
+    intent !== "deflect" && priorDetective.some((t) => intentOf(t.text) === intent);
+  const lastGuest = [...history].reverse().find((t) => t.role === "guest")?.text ?? "";
+
+  const base: string[] = repeated
+    ? REPEAT[v](persona.tie, persona.job, host)
+    : intent === "greeting"
+      ? GREETING[v]()
+      : intent === "whyhere"
+        ? WHY_HERE[v](persona.tie, persona.job, host)
+        : intent === "who"
+          ? WHO[v](persona.tie, persona.job)
+          : intent === "accuse"
+            ? ACCUSED[v]()
+            : DEFLECT[v]();
+
+  // Don't say the exact thing they just said.
+  const fresh = base.filter((o) => scrub(o) !== lastGuest);
+  return scrub(pick(fresh.length ? fresh : base));
+}
+
+/** "You already asked me that" — in voice, the way a real guest gets a bit
+ *  impatient at a repeated question rather than parroting the same line. */
+const REPEAT: Record<Voice, Lines> = {
+  terse: () => [`already told you`, `same as before`, `asked me that`],
+  rambling: (tie) => [`goodness, havent we been over this, but yes, ${tie}, like i said, are you quite alright`],
+  sloppy: () => [`like i said mate`, `told you already didnt i`],
+  drunk: () => [`did i not JUST tell you that. keep UP`, `youre asking me again? honestly`],
+  formal: () => [`As I have already said.`, `I believe I answered that.`],
+  guarded: () => [`why do you keep asking me the same thing`, `i've told you. once was enough`],
+  flustered: () => [`oh, didnt i, sorry, i think i already, um, said`, `oh gosh, again? i, i did answer`],
+  articulate: (tie) => [`I did just say, but I don't mind repeating it: I'm ${tie}.`, `You've asked me that already. Same answer, I'm afraid.`],
+};
 
 /** Natural greetings, in voice — what a real guest says back to "hi". */
 const GREETING: Record<Voice, () => string[]> = {

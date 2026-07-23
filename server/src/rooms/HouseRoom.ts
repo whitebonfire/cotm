@@ -273,7 +273,9 @@ export class HouseRoom extends Room<HouseState> {
     const started = Date.now();
     const q = interview.history[interview.history.length - 1]?.text ?? "";
     const live = await liveReply(persona, this.host, interview.history);
-    const text = live ?? authoredReply(person.name, persona, this.host, q);
+    // Fallback gets the history too, so it won't parrot its own last line or
+    // repeat verbatim when asked the same thing twice.
+    const text = live ?? authoredReply(person.name, persona, this.host, q, interview.history);
 
     // The interview may have closed or moved on while we awaited.
     const current = this.interviews.get(interview.detective);
