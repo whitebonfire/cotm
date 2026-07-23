@@ -98,8 +98,19 @@ export class NpcBrain {
   private path: Array<{ x: number; z: number }> = [];
   private anchor: Anchor | null = null;
   private dwell = 0;
-  /** Seconds spent walking without making progress — for stuck-recovery. */
-  private stuck = 0;
+  /** Seconds left in the current sidestep, and which way it's strafing. */
+  private sideTimer = 0;
+  private sideDir = 1;
+  /** Net-progress tracking: where we were a moment ago, and for how long we've
+   *  failed to travel anywhere. Measured over time, not per frame — a body that
+   *  jitters in place via sidestep still moves each frame but goes nowhere. */
+  private checkX = 0;
+  private checkZ = 0;
+  private checkTimer = 0;
+  private noProgress = 0;
+  /** Anchors this body recently failed to reach: id -> seconds to keep avoiding.
+   *  Stops it re-picking the one seat it can't get to and glitching forever. */
+  private avoid = new Map<string, number>();
 
   /**
    * @param claimed Anchors already taken, so two bodies don't stand inside
@@ -119,6 +130,9 @@ export class NpcBrain {
     if (this.anchor) this.claimed.delete(this.anchor.id);
     this.anchor = null;
     this.path = [];
+    this.sideTimer = 0;
+    this.noProgress = 0;
+    this.checkTimer = 0;
   }
 
   /** Drop the current plan and stand still — used when a human takes over. */
@@ -128,6 +142,15 @@ export class NpcBrain {
   }
 
   update(dt: number) {
+    // Age out the avoid list.
+    if (this.avoid.size > 0) {
+      for (const [id, t] of this.avoid) {
+        const left = t - dt;
+        if (left <= 0) this.avoid.delete(id);
+        else this.avoid.set(id, left);
+      }
+    }
+
     // Walking to somewhere?
     if (this.path.length > 0) {
       this.step(dt);
@@ -153,7 +176,9 @@ export class NpcBrain {
   private chooseSomewhere() {
     if (this.anchor) this.claimed.delete(this.anchor.id);
 
-    const free = ANCHORS.filter((a) => !this.claimed.has(a.id) && a.id !== this.anchor?.id);
+    const free = ANCHORS.filter(
+      (a) => !this.claimed.has(a.id) && a.id !== this.anchor?.id && !this.avoid.has(a.id)
+    );
     if (free.length === 0) {
       this.dwell = range(4, 8);
       return;
@@ -169,6 +194,13 @@ export class NpcBrain {
     this.claimed.add(target.id);
     this.path = routeTo(this.person.x, this.person.z, target);
     this.person.action = Action.WALK;
+
+    // Start fresh progress tracking for the new journey.
+    this.checkX = this.person.x;
+    this.checkZ = this.person.z;
+    this.checkTimer = 0;
+    this.noProgress = 0;
+    this.sideTimer = 0;
   }
 
   private step(dt: number) {
@@ -179,7 +211,12 @@ export class NpcBrain {
 
     if (dist < 0.35) {
       this.path.shift();
-      this.stuck = 0;
+      // Fresh progress tracking for the next leg.
+      this.checkX = this.person.x;
+      this.checkZ = this.person.z;
+      this.checkTimer = 0;
+      this.noProgress = 0;
+      this.sideTimer = 0;
       if (this.path.length === 0) {
         // Arrived. Settle in.
         const action = this.anchor?.action ?? Action.IDLE;
@@ -190,8 +227,21 @@ export class NpcBrain {
       return;
     }
 
-    const stepX = (dx / dist) * SPEED * dt;
-    const stepZ = (dz / dist) * SPEED * dt;
+    // Aim at the waypoint — unless we're mid-sidestep, in which case strafe
+    // perpendicular to slip around whatever is in the way (a table corner, the
+    // couch, another guest). Same trick the test harness uses to navigate.
+    let dirX = dx / dist;
+    let dirZ = dz / dist;
+    if (this.sideTimer > 0) {
+      this.sideTimer -= dt;
+      const px = -dirZ * this.sideDir;
+      const pz = dirX * this.sideDir;
+      dirX = px;
+      dirZ = pz;
+    }
+
+    const stepX = dirX * SPEED * dt;
+    const stepZ = dirZ * SPEED * dt;
 
     const fromX = this.person.x;
     const fromZ = this.person.z;
@@ -201,19 +251,34 @@ export class NpcBrain {
     this.person.yaw = Math.atan2(stepX, stepZ);
     this.person.action = Action.WALK;
 
-    // Stuck-recovery: if a body is trying to walk but barely moving — jammed
-    // against furniture it can't slide past, or shoved by another guest — give
-    // up on this destination and pick a new one, instead of walking on the spot
-    // inside a table forever.
+    // Per-frame block detection: if this step barely moved, kick off a sidestep
+    // to try to slip around the obstacle.
     const progressed = Math.hypot(this.person.x - fromX, this.person.z - fromZ);
-    if (progressed < SPEED * dt * 0.25) {
-      this.stuck += dt;
-      if (this.stuck > 0.8) {
-        this.stuck = 0;
-        this.release(); // drop the destination; next update() picks a fresh one
+    if (progressed < SPEED * dt * 0.25 && this.sideTimer <= 0) {
+      this.sideTimer = 0.5;
+      this.sideDir = -this.sideDir;
+    }
+
+    // Give-up is judged by NET travel over time, not per-frame movement — a body
+    // jittering in place via sidestep moves every frame but goes nowhere. Every
+    // half-second, if it hasn't actually travelled, count that against it; a
+    // body that's genuinely getting around an obstacle racks up real distance
+    // and resets. Persistent failure means the seat is unreachable from here, so
+    // give it up, avoid it for a while, and pick somewhere else — instead of
+    // grinding forever, which is the sit/walk glitch.
+    this.checkTimer += dt;
+    if (this.checkTimer >= 0.5) {
+      const travelled = Math.hypot(this.person.x - this.checkX, this.person.z - this.checkZ);
+      if (travelled < 0.35) this.noProgress += this.checkTimer;
+      else this.noProgress = 0;
+      this.checkX = this.person.x;
+      this.checkZ = this.person.z;
+      this.checkTimer = 0;
+
+      if (this.noProgress >= 2) {
+        if (this.anchor) this.avoid.set(this.anchor.id, 15);
+        this.release();
       }
-    } else {
-      this.stuck = 0;
     }
   }
 }

@@ -327,6 +327,14 @@ const actionsSeen = new Set();
 const stationarySamples = [];
 let minBodyGap = Infinity; // closest any two bodies ever come
 const allKeys = [...a.room.state.people.keys()];
+
+// Walk-in-place detection: a body whose action is WALK but whose position does
+// not change is the sit/walk glitch — jammed against furniture on the way to a
+// seat. Track consecutive stuck-walking samples per body.
+const lastPos = new Map(allKeys.map((k) => [k, { x: a.room.state.people.get(k).x, z: a.room.state.people.get(k).z }]));
+const stuckWalk = new Map(allKeys.map((k) => [k, 0]));
+let maxStuckWalk = 0;
+
 const watchUntil = Date.now() + 24000;
 
 while (Date.now() < watchUntil) {
@@ -339,13 +347,21 @@ while (Date.now() < watchUntil) {
     if (p.action !== 1) stationaryNow++;
     if (Math.hypot(p.x - s.x, p.z - s.z) > 0.5) stirred.add(s.k);
   }
-  // Closest approach between any two bodies this sample — if collision works,
-  // nobody ever deeply overlaps (which would read as walking through each other).
-  for (let i = 0; i < allKeys.length; i++) {
-    for (let j = i + 1; j < allKeys.length; j++) {
-      const p = a.room.state.people.get(allKeys[i]);
-      const q = a.room.state.people.get(allKeys[j]);
-      if (p && q) minBodyGap = Math.min(minBodyGap, Math.hypot(p.x - q.x, p.z - q.z));
+  for (const k of allKeys) {
+    const p = a.room.state.people.get(k);
+    if (!p) continue;
+    const prev = lastPos.get(k);
+    const moved = Math.hypot(p.x - prev.x, p.z - prev.z);
+    // action 1 == WALK. Walking but not moving = jammed.
+    if (p.action === 1 && moved < 0.06) stuckWalk.set(k, stuckWalk.get(k) + 1);
+    else stuckWalk.set(k, 0);
+    maxStuckWalk = Math.max(maxStuckWalk, stuckWalk.get(k));
+    lastPos.set(k, { x: p.x, z: p.z });
+
+    for (const k2 of allKeys) {
+      if (k2 <= k) continue;
+      const q = a.room.state.people.get(k2);
+      if (q) minBodyGap = Math.min(minBodyGap, Math.hypot(p.x - q.x, p.z - q.z));
     }
   }
   stationarySamples.push(stationaryNow / others.length);
@@ -354,6 +370,11 @@ while (Date.now() < watchUntil) {
 
 check("NPCs move by themselves", stirred.size > 0, `${stirred.size}/${others.length} left their spot`);
 check("NPCs do more than one thing", actionsSeen.size > 1, `actions seen: ${[...actionsSeen].sort().join(",")}`);
+check(
+  "no body walks in place (the sit/walk glitch)",
+  maxStuckWalk < 20,
+  `worst run of walking-but-not-moving was ${maxStuckWalk} samples (~${(maxStuckWalk * 0.25).toFixed(1)}s)`
+);
 check(
   "bodies never walk through each other",
   minBodyGap > 0.45,
