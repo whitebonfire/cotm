@@ -16,40 +16,34 @@ import {
 import { liveReply, type ChatTurn } from "../ai/llm.js";
 
 /**
- * Response pacing (SOW §5.2/§5.3). An NPC's reply is held back so it appears
- * after a human-like "typing" delay — long enough that answer SPEED can't out
- * the AI, forcing the Detective to read the writing itself. The delay absorbs
- * however long generation actually took, so a fast call and a slow one feel the
- * same. Scaled to the reply's length, like a real typist.
+ * The reveal delay (SOW §5.2/§5.3). After a question, EVERY answer is held back
+ * and revealed exactly this long later — whether the NPC generated it in half a
+ * second or the human spent fifteen seconds typing. Since the wait from question
+ * to answer is identical for both, answer SPEED tells you nothing; the Detective
+ * has to read the writing itself. The delay absorbs generation time and the
+ * human's typing time alike. (Explicit env parse so 0 is honoured, for tests.)
  */
-const REPLY_MIN_MS = Number(process.env.COTM_REPLY_MIN_MS) || 2500;
-const REPLY_MAX_MS = Number(process.env.COTM_REPLY_MAX_MS) || 14000;
-const REPLY_PER_CHAR_MS = process.env.COTM_REPLY_PER_CHAR_MS ? Number(process.env.COTM_REPLY_PER_CHAR_MS) : 55;
-
-/** After each answer, the Detective must wait this long before the next
- *  question — so an interview is a paced exchange, not a rapid-fire barrage.
- *  (Explicit env parse so 0 is honoured, for tests.) */
-const ASK_COOLDOWN_MS =
-  process.env.COTM_ASK_COOLDOWN_MS !== undefined ? Number(process.env.COTM_ASK_COOLDOWN_MS) : 20000;
+const REVEAL_DELAY_MS =
+  process.env.COTM_REVEAL_MS !== undefined ? Number(process.env.COTM_REVEAL_MS) : 20000;
 
 /** Auto-close an interview the Detective has gone quiet on, so a human target
- *  isn't pinned in the chat (and on autopilot) forever. Comfortably longer than
- *  the ask cooldown, so it doesn't fire mid-exchange. */
-const INTERVIEW_IDLE_MS = ASK_COOLDOWN_MS + 30000;
+ *  isn't pinned in the chat (and on autopilot) forever. */
+const INTERVIEW_IDLE_MS = REVEAL_DELAY_MS + 30000;
 
 interface Interview {
   detective: string; // sessionId asking
   target: string; // bodyId being questioned
   humanTarget: string | null; // sessionId if the target is a person
   history: ChatTurn[]; // the conversation so far
-  busy: boolean; // a reply is pending (NPC generating, or human typing)
-  /** Earliest time the next question is allowed (cooldown after each answer). */
-  nextAskAt: number;
+  busy: boolean; // a question is out; its answer hasn't been revealed yet
+  /** When the current question was asked — the reveal fires at askedAt + delay. */
+  askedAt: number;
+  /** A human target's submitted reply, held until the reveal fires. */
+  pendingHuman: string | null;
   lastActivity: number;
 }
 
 const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
-const clampMs = (v: number) => Math.min(REPLY_MAX_MS, Math.max(REPLY_MIN_MS, v));
 
 interface InputMessage {
   /** Forward axis, -1..1 */
@@ -234,7 +228,8 @@ export class HouseRoom extends Room<HouseState> {
       humanTarget: this.driverOf.get(target) ?? null,
       history: [],
       busy: false,
-      nextAskAt: 0, // the first question is free
+      askedAt: 0,
+      pendingHuman: null,
       lastActivity: Date.now(),
     };
     this.interviews.set(client.sessionId, interview);
@@ -256,69 +251,80 @@ export class HouseRoom extends Room<HouseState> {
 
   private askQuestion(client: Client, text: string) {
     const interview = this.interviews.get(client.sessionId);
-    if (!interview || interview.busy) return;
-    // Enforce the between-questions cooldown server-side (the client gates too).
-    if (Date.now() < interview.nextAskAt) return;
+    if (!interview || interview.busy) return; // one question out at a time
     const q = scrub(text).slice(0, ANSWER_CAP);
     if (!q) return;
 
     interview.history.push({ role: "detective", text: q });
-    interview.lastActivity = Date.now();
+    interview.askedAt = Date.now();
+    interview.lastActivity = interview.askedAt;
     interview.busy = true;
-    client.send("interview_typing", {}); // "…" while the guest replies
+    interview.pendingHuman = null;
+    // The Detective waits the full reveal window — this is the delay that hides
+    // whether the answer came from the AI in a blink or a human typing hard.
+    client.send("interview_typing", { revealMs: REVEAL_DELAY_MS });
 
     if (interview.humanTarget) {
-      // Relay the question to the human; they type back (humanReply).
+      // Relay to the human. They type within the window; whatever they've got at
+      // reveal time is what the Detective sees.
       const humanClient = this.clients.find((c) => c.sessionId === interview.humanTarget);
-      humanClient?.send("interview_question", { text: q });
+      humanClient?.send("interview_question", { text: q, windowMs: REVEAL_DELAY_MS });
+      this.clock.setTimeout(() => this.reveal(interview), REVEAL_DELAY_MS);
     } else {
       this.answerAsNpc(interview);
     }
   }
 
-  /** An NPC answers live, held back to a human-like pace so timing isn't a tell. */
+  /** An NPC answers live; the reply is held until the reveal window is up, so it
+   *  lands at the same time a human's answer would (SOW §5.2). */
   private async answerAsNpc(interview: Interview) {
     const persona = this.personas.get(interview.target);
     const person = this.state.people.get(interview.target);
     if (!persona || !person) return;
 
-    const started = Date.now();
     const q = interview.history[interview.history.length - 1]?.text ?? "";
     const live = await liveReply(persona, this.host, interview.history);
-    // Fallback gets the history too, so it won't parrot its own last line or
-    // repeat verbatim when asked the same thing twice.
+    // Fallback gets the history too, so it won't parrot its own last line.
     const text = live ?? authoredReply(person.name, persona, this.host, q, interview.history);
 
-    // The interview may have closed or moved on while we awaited.
-    const current = this.interviews.get(interview.detective);
-    if (current !== interview) return;
+    if (this.interviews.get(interview.detective) !== interview || !interview.busy) return;
 
-    // Pace it: total time from "typing" to reply is a length-scaled, human-like
-    // delay that absorbs however long generation took (SOW §5.2).
-    const targetMs = clampMs(REPLY_MIN_MS + text.length * REPLY_PER_CHAR_MS);
-    await sleep(Math.max(0, targetMs - (Date.now() - started)));
-    if (this.interviews.get(interview.detective) !== interview) return;
+    // Wait out the rest of the reveal window (generation time is absorbed here).
+    await sleep(Math.max(0, REVEAL_DELAY_MS - (Date.now() - interview.askedAt)));
+    if (this.interviews.get(interview.detective) !== interview || !interview.busy) return;
 
     this.deliverGuestReply(interview, text, expressionFor(persona.voice));
   }
 
+  /** A human's reply is stored, not shown — the reveal timer delivers it so it
+   *  appears on the same clock as an NPC's, hiding how long they took to type. */
   private humanReply(client: Client, text: string) {
     for (const interview of this.interviews.values()) {
       if (interview.humanTarget === client.sessionId && interview.busy) {
-        const reply = scrub(text).slice(0, ANSWER_CAP);
-        const persona = this.personas.get(interview.target);
-        this.deliverGuestReply(interview, reply, persona ? expressionFor(persona.voice) : "neutral");
+        interview.pendingHuman = scrub(text).slice(0, ANSWER_CAP);
         return;
       }
     }
   }
 
+  /** Fires at askedAt + reveal window for a human target: shows whatever they
+   *  submitted, or an authored line if the clock beat them. */
+  private reveal(interview: Interview) {
+    if (this.interviews.get(interview.detective) !== interview || !interview.busy) return;
+    const persona = this.personas.get(interview.target);
+    const person = this.state.people.get(interview.target);
+    const q = interview.history[interview.history.length - 1]?.text ?? "";
+    const text =
+      interview.pendingHuman ??
+      (person && persona ? authoredReply(person.name, persona, this.host, q, interview.history) : "…");
+    this.deliverGuestReply(interview, text, persona ? expressionFor(persona.voice) : "neutral");
+  }
+
   private deliverGuestReply(interview: Interview, text: string, expression: string) {
     interview.history.push({ role: "guest", text });
     interview.busy = false;
-    const now = Date.now();
-    interview.lastActivity = now;
-    interview.nextAskAt = now + ASK_COOLDOWN_MS; // wait before the next question
+    interview.pendingHuman = null;
+    interview.lastActivity = Date.now();
     const detective = this.clients.find((c) => c.sessionId === interview.detective);
     const person = this.state.people.get(interview.target);
     detective?.send("interview_msg", {
@@ -326,7 +332,6 @@ export class HouseRoom extends Room<HouseState> {
       name: person?.name ?? "",
       text,
       expression,
-      cooldownMs: ASK_COOLDOWN_MS,
     });
   }
 

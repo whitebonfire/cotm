@@ -24,6 +24,9 @@ export class InterviewBox {
   private cap = 320;
   /** True while a question is on the table and we're waiting for their reply. */
   private pending = false;
+  private deadline = 0;
+  private ticker: ReturnType<typeof setInterval> | null = null;
+  private timerEl!: HTMLDivElement;
   onSubmit: ((text: string) => void) | null = null;
 
   constructor() {
@@ -32,7 +35,7 @@ export class InterviewBox {
     root.className = "hidden";
     root.innerHTML = `
       <div class="tb-frame">
-        <div class="tb-head"><span class="tb-dot">●</span> someone is questioning you</div>
+        <div class="tb-head"><span class="tb-dot">●</span> someone is questioning you<div class="tb-timer"></div></div>
         <div class="tb-persona"></div>
         <div class="tb-thread"></div>
         <div class="tb-compose">
@@ -48,6 +51,7 @@ export class InterviewBox {
     this.thread = root.querySelector(".tb-thread") as HTMLDivElement;
     this.field = root.querySelector(".tb-input") as HTMLTextAreaElement;
     this.countEl = root.querySelector(".tb-count") as HTMLDivElement;
+    this.timerEl = root.querySelector(".tb-timer") as HTMLDivElement;
 
     this.field.addEventListener("input", () => this.updateCount());
     this.field.addEventListener("keydown", (e) => {
@@ -77,14 +81,25 @@ export class InterviewBox {
     this.open = true;
   }
 
-  /** A question arrived — show it and let them reply. */
-  question(text: string) {
+  /** A question arrived — show it and let them reply within the window. */
+  question(text: string, windowMs = 20000) {
     this.addBubble(text, "them");
     this.pending = true;
     this.setEnabled(true, "type your reply…");
     this.field.value = "";
     this.updateCount();
     this.field.focus();
+
+    // Countdown to the reveal. Auto-send a little early so it reaches the server
+    // before the window closes; otherwise the detective sees an authored line.
+    this.deadline = Date.now() + windowMs;
+    if (this.ticker) clearInterval(this.ticker);
+    this.ticker = setInterval(() => {
+      const left = Math.max(0, this.deadline - Date.now());
+      this.timerEl.textContent = `${Math.ceil(left / 1000)}s`;
+      this.timerEl.classList.toggle("urgent", left < 6000);
+      if (left <= 1200 && this.pending && this.field.value.trim()) this.submit();
+    }, 250);
   }
 
   private submit() {
@@ -92,9 +107,12 @@ export class InterviewBox {
     const text = this.field.value.trim();
     if (!text) return;
     this.pending = false;
+    if (this.ticker) clearInterval(this.ticker);
+    this.ticker = null;
+    this.timerEl.textContent = "";
     this.addBubble(text, "me");
     this.onSubmit?.(text);
-    this.setEnabled(false, "waiting for their next question…");
+    this.setEnabled(false, "sent — waiting for their next question…");
   }
 
   private addBubble(text: string, who: "me" | "them") {
@@ -121,6 +139,9 @@ export class InterviewBox {
     this.root.classList.add("hidden");
     this.open = false;
     this.pending = false;
+    if (this.ticker) clearInterval(this.ticker);
+    this.ticker = null;
+    this.timerEl.textContent = "";
   }
 }
 

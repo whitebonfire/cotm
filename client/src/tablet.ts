@@ -69,9 +69,9 @@ export class Tablet {
 
   private interview: InterviewView = { status: "idle", messages: [], typing: false };
   private denied = "";
-  /** Earliest time the next question is allowed — the between-questions cooldown. */
-  private cooldownUntil = 0;
-  private cooldownTimer: ReturnType<typeof setInterval> | null = null;
+  /** When the guest's reply will be revealed — the fixed wait after a question. */
+  private revealUntil = 0;
+  private revealTimer: ReturnType<typeof setInterval> | null = null;
   /** Set by main. onInterview opens a chat with a guest; onAsk sends a typed
    *  question; onCloseInterview ends the chat. */
   onInterview: ((id: string) => void) | null = null;
@@ -144,68 +144,54 @@ export class Tablet {
   interviewOpen(target: string, name: string) {
     this.interview = { status: "chat", target, name, messages: [], typing: false };
     this.denied = "";
-    this.clearCooldown();
+    this.clearReveal();
     this.render();
     this.focusInput();
   }
 
-  private get onCooldown(): boolean {
-    return Date.now() < this.cooldownUntil;
+  private clearReveal() {
+    this.revealUntil = 0;
+    if (this.revealTimer) clearInterval(this.revealTimer);
+    this.revealTimer = null;
   }
 
-  private clearCooldown() {
-    this.cooldownUntil = 0;
-    if (this.cooldownTimer) clearInterval(this.cooldownTimer);
-    this.cooldownTimer = null;
-  }
-
-  /** Locally echo the Detective's own question, then show the guest "typing". */
+  /** Locally echo the Detective's own question. The guest's reply won't come
+   *  back until the reveal window is up — the same wait for AI and human alike. */
   interviewAsked(text: string) {
     if (this.interview.status !== "chat") return;
     this.interview.messages.push({ from: "detective", text });
     this.render();
   }
 
-  interviewTyping() {
+  interviewTyping(revealMs?: number) {
     if (this.interview.status !== "chat") return;
     this.interview.typing = true;
-    this.render();
-  }
-
-  interviewMsg(msg: { name: string; text: string; expression: Expression; cooldownMs?: number }) {
-    if (this.interview.status !== "chat") return;
-    this.interview.typing = false;
-    this.interview.expression = msg.expression;
-    this.interview.messages.push({ from: "guest", text: msg.text });
-
-    // Between-questions cooldown: lock the input and count it down.
-    const cd = msg.cooldownMs ?? 0;
-    this.clearCooldown();
-    if (cd > 0) {
-      this.cooldownUntil = Date.now() + cd;
-      this.cooldownTimer = setInterval(() => {
-        if (this.onCooldown) {
-          this.updateCooldownDisplay();
-        } else {
-          this.clearCooldown();
-          this.render();
-          this.focusInput();
-        }
+    // Count down the reveal window under the "typing" bubble, so the wait reads
+    // as intentional rather than a hang.
+    this.clearReveal();
+    if (revealMs && revealMs > 0) {
+      this.revealUntil = Date.now() + revealMs;
+      this.revealTimer = setInterval(() => {
+        if (this.interview.typing && Date.now() < this.revealUntil) this.updateRevealDisplay();
       }, 500);
     }
     this.render();
   }
 
-  /** Update just the input placeholder/button during cooldown, without a full
-   *  re-render (which would blow away the message list scroll each tick). */
-  private updateCooldownDisplay() {
-    const input = this.screenEl.querySelector(".chat-input") as HTMLInputElement | null;
-    const send = this.screenEl.querySelector(".chat-send") as HTMLButtonElement | null;
-    if (!input || !send) return;
-    const left = Math.ceil((this.cooldownUntil - Date.now()) / 1000);
-    input.placeholder = `wait ${left}s before the next question…`;
-    input.disabled = true;
-    send.disabled = true;
+  interviewMsg(msg: { name: string; text: string; expression: Expression }) {
+    if (this.interview.status !== "chat") return;
+    this.clearReveal();
+    this.interview.typing = false;
+    this.interview.expression = msg.expression;
+    this.interview.messages.push({ from: "guest", text: msg.text });
+    this.render();
+    this.focusInput(); // input is free again immediately — the wait was before
+  }
+
+  /** Update the reveal countdown under the typing dots without a full re-render. */
+  private updateRevealDisplay() {
+    const el = this.screenEl.querySelector(".reveal-left") as HTMLElement | null;
+    if (el) el.textContent = `${Math.max(0, Math.ceil((this.revealUntil - Date.now()) / 1000))}s`;
   }
 
   interviewDenied(reason: string) {
@@ -216,7 +202,7 @@ export class Tablet {
   /** Called when the chat ends (back button, or server closed it). */
   private closeInterview(tellServer = true) {
     this.interview = { status: "idle", messages: [], typing: false };
-    this.clearCooldown();
+    this.clearReveal();
     if (tellServer) this.onCloseInterview?.();
     this.render();
   }
@@ -281,7 +267,7 @@ export class Tablet {
 
   private sendQuestion() {
     const input = this.screenEl.querySelector(".chat-input") as HTMLInputElement | null;
-    if (!input || this.interview.status !== "chat" || this.interview.typing || this.onCooldown) return;
+    if (!input || this.interview.status !== "chat" || this.interview.typing) return;
     const text = input.value.trim();
     if (!text) return;
     input.value = "";
@@ -303,9 +289,10 @@ export class Tablet {
     if (this.interview.status === "chat") {
       const entry = this.roster.find((e) => e.id === this.interview.target);
       const face = this.faceHtml(entry, this.interview.expression ?? "neutral", 56);
-      const cooling = this.onCooldown;
-      const cooldownLeft = Math.ceil((this.cooldownUntil - Date.now()) / 1000);
-      const locked = this.interview.typing || cooling;
+      // While waiting for the reply, the input is locked — you get one question
+      // per reveal window, then read the answer when it lands.
+      const waiting = this.interview.typing;
+      const revealLeft = Math.max(0, Math.ceil((this.revealUntil - Date.now()) / 1000));
       const bubbles = this.interview.messages
         .map((m) =>
           m.from === "detective"
@@ -313,8 +300,10 @@ export class Tablet {
             : `<div class="msg them">${escapeHtml(m.text)}</div>`
         )
         .join("");
-      const typing = this.interview.typing
-        ? `<div class="msg them typing"><span></span><span></span><span></span></div>`
+      const typing = waiting
+        ? `<div class="msg them typing"><span></span><span></span><span></span>${
+            this.revealUntil ? `<em class="reveal-left">${revealLeft}s</em>` : ""
+          }</div>`
         : "";
       this.screenEl.innerHTML = `
         <div class="chat">
@@ -324,15 +313,15 @@ export class Tablet {
             <button class="chat-back" data-back>× end</button>
           </div>
           <div class="chat-list">${bubbles}${typing}
-            ${this.interview.messages.length === 0 && !this.interview.typing
+            ${this.interview.messages.length === 0 && !waiting
               ? `<div class="chat-empty">Ask them anything. Read how they answer.</div>`
               : ""}
           </div>
           <div class="chat-compose">
             <input class="chat-input" type="text" maxlength="180"
-              placeholder="${cooling ? `wait ${cooldownLeft}s before the next question…` : "type a question…"}"
-              ${locked ? "disabled" : ""} />
-            <button class="chat-send" data-send ${locked ? "disabled" : ""}>ask</button>
+              placeholder="${waiting ? "waiting for their reply…" : "type a question…"}"
+              ${waiting ? "disabled" : ""} />
+            <button class="chat-send" data-send ${waiting ? "disabled" : ""}>ask</button>
           </div>
         </div>`;
       return;

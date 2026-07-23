@@ -4,6 +4,7 @@
 import { Client } from "colyseus.js";
 
 const ENDPOINT = "ws://localhost:2567";
+const REVEAL_MS = Number(process.env.COTM_REVEAL_MS) || 800;
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const results = [];
 const check = (name, pass, detail = "") => {
@@ -75,19 +76,23 @@ a.room.send("interview", { target: npc });
 const opened = await a.waitFor("interview_open", 1500);
 check("opening a chat confirms the guest", !!opened && opened.target === npc, opened?.name);
 
+const askedAt = Date.now();
 a.room.send("interview_ask", { text: "why are you here tonight?" });
 const typing = await a.waitFor("interview_typing", 1000);
 check("the guest shows as typing before replying", !!typing);
-const reply1 = await a.waitFor("interview_msg", 3000);
+const noEarly = await a.waitFor("interview_msg", Math.max(0, REVEAL_MS - 300));
+check("no answer before the reveal window is up", !noEarly, noEarly ? "arrived early!" : "");
+const reply1 = await a.waitFor("interview_msg", REVEAL_MS + 3000);
+const waited = Date.now() - askedAt;
 check("a live reply comes back to the question", !!reply1 && reply1.text.length > 0, `"${reply1?.text?.slice(0, 40)}…"`);
+check("the reply waits the fixed reveal window", waited >= REVEAL_MS - 250, `${waited}ms vs ${REVEAL_MS}ms window`);
 check("reply carries a valid expression", VALID_EXPR.includes(reply1?.expression), reply1?.expression);
 check("reply has no machine tells (no em-dash/semicolon)", !/[—–;]/.test(reply1?.text ?? ""), reply1?.text?.slice(0, 40));
-check("typing came before the reply", (typing?.at ?? 0) <= (reply1?.at ?? Infinity) || true); // ordering implied
 
 // Second turn — the conversation continues.
 a.clearInbox();
 a.room.send("interview_ask", { text: "and what do you do for a living?" });
-const reply2 = await a.waitFor("interview_msg", 3000);
+const reply2 = await a.waitFor("interview_msg", REVEAL_MS + 3000);
 check("the conversation continues (a second reply)", !!reply2 && reply2.text.length > 0, `"${reply2?.text?.slice(0, 40)}…"`);
 a.clearInbox();
 
@@ -104,7 +109,9 @@ check("the human receives the detective's question", q?.text === "who invited yo
 
 const HUMAN_REPLY = "an old friend of the host, if you must know";
 b.room.send("interview_answer", { text: HUMAN_REPLY });
-const humanMsg = await a.waitFor("interview_msg", 2000);
+// Held until the reveal window, just like an NPC's — the detective can't see it
+// arrive early even though the human submitted at once.
+const humanMsg = await a.waitFor("interview_msg", REVEAL_MS + 2000);
 check("the human's typed reply reaches the detective", humanMsg?.text === HUMAN_REPLY, `"${humanMsg?.text}"`);
 
 // ---- closing the chat releases the human

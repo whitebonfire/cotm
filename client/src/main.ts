@@ -376,7 +376,7 @@ function wire(room: Room<HouseState>) {
   room.onMessage("interview_open", (m: { target: string; name: string }) =>
     tablet.interviewOpen(m.target, m.name)
   );
-  room.onMessage("interview_typing", () => tablet.interviewTyping());
+  room.onMessage("interview_typing", (m: { revealMs?: number }) => tablet.interviewTyping(m?.revealMs));
   room.onMessage("interview_msg", (m: any) => tablet.interviewMsg(m));
   room.onMessage("interview_denied", (m: { reason: string }) => tablet.interviewDenied(m.reason));
 
@@ -388,7 +388,9 @@ function wire(room: Room<HouseState>) {
     document.exitPointerLock();
     interviewBox.begin(m);
   });
-  room.onMessage("interview_question", (m: { text: string }) => interviewBox.question(m.text));
+  room.onMessage("interview_question", (m: { text: string; windowMs?: number }) =>
+    interviewBox.question(m.text, m.windowMs)
+  );
   room.onMessage("interview_end", () => {
     beingInterviewed = false;
     interviewBox.hide();

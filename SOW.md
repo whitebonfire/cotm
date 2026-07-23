@@ -52,13 +52,15 @@ Get this wrong in either direction and the game breaks — too fast and the inte
 the Detective types real questions and the guest answers turn by turn. NPCs
 answer live via the model; a human types their own replies.
 
-This trades away the blank window's latency-hiding, so the timing tell it solved
-(§5.2) comes back — a live conversation exposes how long a reply took. It's
-handled instead by **pacing**: an NPC's reply is held back to a length-scaled,
-human-like delay that absorbs however long generation took, so answer *speed*
-can't out the AI and the Detective still has to read the writing (§5.3). A
-human's real typing time is shown the same way (a "typing" indicator). The
-per-answer character cap and the writing-voice spread are unchanged.
+To keep the timing tell (§5.2) from coming back — a live conversation would
+otherwise expose how long a reply took — every answer is held behind a **fixed
+reveal window** (default 20s, `COTM_REVEAL_MS`). From question to answer is the
+same wait whether the NPC generated instantly or the human spent the whole
+window typing, so answer *speed* tells the Detective nothing and they must read
+the writing (§5.3). The Detective sees a "typing" countdown; the human gets the
+same window to type, auto-submitted at the end. Per-answer character cap and the
+writing-voice spread are unchanged. (This is essentially the original blank
+panel, per-question, at 20s.)
 
 Open questions this raises, to revisit in playtesting: whether the pacing band
 (currently ~2.5–14s) actually overlaps human typing times well enough, and
