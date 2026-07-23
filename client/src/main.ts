@@ -6,6 +6,7 @@ import { Action, SPEED, resolveCollisions, roomAt } from "../../server/src/world
 import { buildHouse, buildRoomLabels, buildFurniture } from "./house";
 import { buildPerson, animatePerson, type PersonRig } from "./person";
 import { Tablet, type RosterEntry } from "./tablet";
+import { InterviewBox } from "./interview";
 
 const EYE = 1.25;
 const CAM_DIST = 6.0;
@@ -57,6 +58,11 @@ buildRoomLabels(scene);
 
 const tablet = new Tablet(scene);
 tablet.setAspect(window.innerWidth / window.innerHeight);
+
+const interviewBox = new InterviewBox();
+/** True while THIS player is being questioned — their body autopilots and their
+ *  input is ignored, so the typing box has their full attention (SOW §5). */
+let beingInterviewed = false;
 
 /** Transient HUD line, e.g. "camera placed". Cleared after a couple seconds. */
 let flash = "";
@@ -157,6 +163,9 @@ function refreshRoster() {
       skin: body.person.skin,
       age: body.person.age,
       acc: body.person.acc,
+      hair: body.person.hair,
+      hat: body.person.hat,
+      hairHue: body.person.hairHue,
     });
   });
   entries.sort((a, b) => a.name.localeCompare(b.name));
@@ -288,6 +297,30 @@ function wire(room: Room<HouseState>) {
     }
   });
 
+  // ---- interviews (SOW §5)
+  // Detective side: pick a guest → blank panel → the reveal.
+  tablet.onInterview = (id: string) => room.send("interview", { target: id });
+  room.onMessage("interview_started", (m: { target: string; name: string; windowMs: number }) => {
+    tablet.interviewMs = m.windowMs;
+    tablet.interviewStarted(m.target, m.name);
+  });
+  room.onMessage("interview_answer", (m: any) => tablet.interviewAnswer(m));
+  room.onMessage("interview_denied", (m: { reason: string }) => tablet.interviewDenied(m.reason));
+
+  // Being-questioned side: the typing box takes over the screen.
+  interviewBox.onSubmit = (text: string) => room.send("interview_reply", { text });
+  room.onMessage("interview_prompt", (m: any) => {
+    beingInterviewed = true;
+    tablet.close();
+    document.exitPointerLock();
+    interviewBox.windowMs = m.windowMs ?? 40000;
+    interviewBox.show(m);
+  });
+  room.onMessage("interview_end", () => {
+    beingInterviewed = false;
+    interviewBox.hide();
+  });
+
   $(room.state).people.onAdd((person: Person, id: string) => {
     addBody(person, id);
     if (id === myBody) {
@@ -324,8 +357,8 @@ let sendAccum = 0;
 let elapsed = 0;
 
 function currentInput() {
-  // Hands are on the tablet — you don't walk while watching a screen.
-  if (tablet.up) return { f: 0, r: 0, yaw: camYaw };
+  // Hands are on the tablet, or on the typing box — you don't walk either way.
+  if (tablet.up || beingInterviewed) return { f: 0, r: 0, yaw: camYaw };
   const f = (keys.has("KeyW") ? 1 : 0) - (keys.has("KeyS") ? 1 : 0);
   const r = (keys.has("KeyD") ? 1 : 0) - (keys.has("KeyA") ? 1 : 0);
   return { f, r, yaw: camYaw };
@@ -348,7 +381,17 @@ function tick() {
 
   const self = myBody ? bodies.get(myBody) : undefined;
 
-  if (self) {
+  if (self && beingInterviewed) {
+    // The server is autopiloting our body while we type — just follow it, the
+    // same way we follow any other guest, so we don't fight the AI's steering.
+    localPos.lerp(new THREE.Vector3(self.person.x, self.person.y, self.person.z), 1 - Math.pow(0.0015, dt));
+    self.rig.group.position.copy(localPos);
+    let d = self.person.yaw - self.rig.group.rotation.y;
+    while (d > Math.PI) d -= Math.PI * 2;
+    while (d < -Math.PI) d += Math.PI * 2;
+    self.rig.group.rotation.y += d * (1 - Math.pow(0.0015, dt));
+    selfRing.position.set(localPos.x, 0.03, localPos.z);
+  } else if (self) {
     const forwardX = -Math.sin(camYaw);
     const forwardZ = -Math.cos(camYaw);
     const rightX = Math.cos(camYaw);

@@ -4,7 +4,7 @@ A browser-based 3D detective game. One Detective, one Spy, twelve AI partygoers,
 
 See [SOW.md](./SOW.md) for the design. This README is about running the thing.
 
-**Current state: milestone 3 — the bodies.** Twelve guests at a party in a seven-room house: reading, drinking, examining the jewels, gossiping in circles, drifting between rooms. You are one of them. No roles, no abilities, no interview yet.
+**Current state: milestone 5 — the interview.** The heart of the game. Raise the tablet, question a guest, and forty seconds later read what they wrote back. NPCs answer in character, each in a different writing voice; a human being questioned types their own reply under the clock. Still no roles or win conditions (those are M7).
 
 ```
         -20        -6    0    6              20
@@ -40,6 +40,22 @@ Then open <http://localhost:5173>. Open it twice to see both players.
 
 `npm run dev` runs two processes: the game server on `:2567` and Vite on `:5173` with hot reload. The client points at `localhost:2567` automatically in dev.
 
+### Live AI answers (optional)
+
+Interview answers are written live by Claude when an API key is present, and by
+an authored fallback otherwise — so the game runs fully either way. To turn on
+live generation:
+
+```bash
+export ANTHROPIC_API_KEY=sk-ant-...
+```
+
+The server uses Haiku for answers (`COTM_MODEL` overrides it) with a hard 20s
+timeout that falls back to the authored line, so a slow or failed call can never
+leave an NPC silent — which would look exactly like a stalling Spy. The
+Detective's panel is blank for the whole 40s window regardless, so all API
+latency is hidden. Set `COTM_INTERVIEW_MS` to shorten the window for testing.
+
 ## Run the production build
 
 ```bash
@@ -54,8 +70,12 @@ Everything is served from <http://localhost:2567> — one process, one port, exa
 ```bash
 npm run test:house   # geometry only, no server needed
 
-npm start &          # this one needs a server
+npm start &          # these need a server
 npm run test:spine
+
+# the interview test wants a short window:
+COTM_INTERVIEW_MS=1500 npm start &
+COTM_INTERVIEW_MS=1500 npm run test:interview
 ```
 
 `scripts/house-check.mjs` validates the floor plan itself: flood-fills the house and asserts every room is reachable, every room has two or more exits, no pocket of floor is walled off, no spawn or anchor sits inside a wall, no two anchors overlap, and every room can be routed to from every other room.
@@ -69,7 +89,9 @@ It also guards **the disguise**, which is the part worth understanding:
 - a human body and an NPC body expose **the same fields**
 - there is no `players`/`npcs` split in the state to read
 
-Worth keeping green. Between them these caught the stale-input bug, a static anchor-claim set that would have leaked between concurrent games, and confirmed collision lands within a millimetre of where the maths says it should.
+`scripts/interview-test.mjs` drives the interview: blank window then an answer, no answer before the window is up, one interview at a time, can't question yourself, the questioned human gets a typing prompt with a persona and their typed words come back to the Detective, silence falls back to an authored line, and — the load-bearing one — no persona or answer text ever leaks into synced state.
+
+Worth keeping green. Between them these caught the stale-input bug, a static anchor-claim set that would have leaked between concurrent games, the sit/walk NPC glitch, and confirmed collision lands within a millimetre of where the maths says it should.
 
 ---
 
@@ -85,12 +107,18 @@ server/          authoritative game server
   src/index.ts         express + colyseus + static hosting
   src/rooms/HouseRoom.ts   simulation, body takeover, actions
   src/schema/GameState.ts  what crosses the wire — read the comment
-  src/ai/npc.ts        who the guests are, and how they decide where to go
+  src/ai/npc.ts        how the guests decide where to go
+  src/ai/persona.ts    who each guest is + the writing-voice spread (SOW §5.3)
+  src/ai/llm.ts        optional live answers via Claude, timeout -> authored
   src/world/house.ts   SHARED floor plan + collision (see below)
   src/world/nav.ts     SHARED anchors + room graph + pathfinding
+  src/world/furniture.ts  SHARED furniture colliders
+client/src/tablet.ts   detective's tablet: camera, roster, interview reveal
+client/src/interview.ts the being-questioned typing box
 scripts/
   house-check.mjs  floor plan + anchor + routing validation, no server
   spine-test.mjs   two-client netcode and disguise acceptance test
+  interview-test.mjs  the interview flow, needs a short-window server
 render.yaml      deploy blueprint
 ```
 

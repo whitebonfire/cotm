@@ -141,6 +141,14 @@ export class NpcBrain {
     this.dwell = 0;
   }
 
+  /** Bring the body back to life on autopilot — used while its human is typing
+   *  an interview answer, so the body keeps milling about instead of freezing
+   *  and giving the Spy away (SOW §2.3). Pauses a beat, then wanders. */
+  resume() {
+    this.release();
+    this.dwell = range(0.4, 1.6);
+  }
+
   update(dt: number) {
     // Age out the avoid list.
     if (this.avoid.size > 0) {

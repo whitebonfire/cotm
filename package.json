@@ -14,12 +14,14 @@
     "start": "node dist/server/index.js",
     "typecheck": "tsc --noEmit -p tsconfig.json",
     "test:spine": "node scripts/spine-test.mjs",
-    "test:house": "npm run build:server && node scripts/house-check.mjs"
+    "test:house": "npm run build:server && node scripts/house-check.mjs",
+    "test:interview": "node scripts/interview-test.mjs"
   },
   "engines": {
     "node": ">=22"
   },
   "dependencies": {
+    "@anthropic-ai/sdk": "^0.114.0",
     "@colyseus/core": "0.16.24",
     "@colyseus/schema": "3.0.76",
     "@colyseus/ws-transport": "0.16.5",

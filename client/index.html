@@ -131,6 +131,79 @@
         padding: 10px; text-align: center; font-size: 11px; color: #6c7180;
         border-top: 1px solid #262b35; background: rgba(10, 12, 17, 0.72);
       }
+      #tablet .roster button[data-interview] { border-color: #d8b46a; color: #d8b46a; }
+      #tablet .denied {
+        margin: 10px 18px 0; padding: 8px 12px; font-size: 12px;
+        color: #e0a05a; border: 1px solid #6b4a2a; border-radius: 3px; background: rgba(90,50,20,0.2);
+      }
+
+      /* interview: the waiting (blank) panel */
+      #tablet .waiting {
+        position: absolute; inset: 0; display: grid; place-content: center;
+        text-align: center; gap: 10px; color: #cdd0d8; font-size: 15px;
+      }
+      #tablet .waiting .qmark {
+        font-size: 60px; color: #d8b46a; justify-self: center;
+        width: 96px; height: 96px; line-height: 96px; border-radius: 50%;
+        border: 2px dashed #4a4030; margin-bottom: 8px;
+        animation: pulse 1.6s ease-in-out infinite;
+      }
+      #tablet .waiting .sub { font-size: 12px; color: #7c818f; }
+      @keyframes pulse { 0%,100%{opacity:.5} 50%{opacity:1} }
+
+      /* interview: the reveal thread */
+      #tablet .thread { padding: 22px; display: flex; flex-direction: column; align-items: center; }
+      #tablet .portrait {
+        border-radius: 8px; border: 1px solid #2b2f3a; image-rendering: pixelated;
+        box-shadow: 0 8px 24px rgba(0,0,0,0.5);
+      }
+      #tablet .who-name { margin: 12px 0 16px; font-size: 16px; color: #e8e6e1; letter-spacing: 0.04em; }
+      #tablet .bubble {
+        max-width: 560px; align-self: flex-start; margin-left: 8%;
+        padding: 14px 18px; border-radius: 4px 16px 16px 16px;
+        background: #1b2029; border: 1px solid #2b3140;
+        font-size: 15px; line-height: 1.6; color: #dfe2e8; white-space: pre-wrap;
+      }
+      #tablet .thread [data-back] {
+        margin-top: 22px; font-size: 12px; padding: 8px 18px; align-self: center;
+      }
+
+      /* the typing box (being questioned) */
+      #typebox {
+        position: fixed; inset: 0; z-index: 40; display: grid; place-items: center;
+        background: rgba(6, 8, 12, 0.9); backdrop-filter: blur(3px);
+      }
+      #typebox.hidden { display: none; }
+      .tb-frame {
+        width: min(88vw, 640px); background: #0f1218;
+        border: 1px solid #3a3f4b; border-radius: 12px; overflow: hidden;
+        box-shadow: 0 24px 70px rgba(0,0,0,0.7);
+      }
+      .tb-head {
+        padding: 12px 16px; font-size: 12px; letter-spacing: 0.06em; color: #cdd0d8;
+        border-bottom: 1px solid #262b35; background: rgba(10,12,17,0.7);
+        display: flex; align-items: center; gap: 8px;
+      }
+      .tb-head .tb-dot { color: #ff4d4d; animation: pulse 1.4s infinite; }
+      .tb-timer { margin-left: auto; font-size: 14px; color: #9aa0ae; }
+      .tb-timer.urgent { color: #ff5d5d; font-weight: 700; }
+      .tb-q { padding: 16px 18px 6px; font-size: 16px; color: #e8e6e1; }
+      .tb-persona {
+        margin: 0 18px 12px; padding: 12px 14px; font-size: 13px; line-height: 1.6;
+        color: #b9bdc8; background: #171b22; border-left: 2px solid #d8b46a; border-radius: 3px;
+      }
+      .tb-persona .tb-label { font-size: 10px; letter-spacing: 0.14em; color: #7c818f; margin-bottom: 4px; }
+      .tb-persona .tb-hint { margin-top: 8px; font-size: 11px; color: #6c7180; font-style: italic; }
+      .tb-input {
+        display: block; width: calc(100% - 36px); margin: 0 18px; resize: none;
+        font: inherit; font-size: 15px; line-height: 1.6; color: #e8e6e1;
+        background: #0a0c11; border: 1px solid #2b3140; border-radius: 4px; padding: 12px;
+      }
+      .tb-input:focus { outline: none; border-color: #d8b46a; }
+      .tb-foot { display: flex; align-items: center; padding: 12px 18px 16px; gap: 12px; }
+      .tb-count { font-size: 12px; color: #6c7180; }
+      .tb-count.full { color: #ff5d5d; }
+      .tb-send { margin-left: auto; }
     </style>
   </head>
   <body>
@@ -139,11 +212,11 @@
     <div id="overlay">
       <div class="card">
         <h1>🔎 CLUES OF THE MIND 🕶</h1>
-        <div class="sub">milestone 4 &middot; the tablet</div>
+        <div class="sub">milestone 5 &middot; the interview</div>
         <button id="play" disabled>connecting&hellip;</button>
         <p>
           <kbd>W</kbd><kbd>A</kbd><kbd>S</kbd><kbd>D</kbd> move &middot; mouse look &middot; <kbd>E</kbd> join in<br />
-          <kbd>F</kbd> drop a camera &middot; <kbd>Q</kbd> raise the tablet<br />
+          <kbd>F</kbd> drop a camera &middot; <kbd>Q</kbd> tablet, then question a guest<br />
           <span style="opacity:.6">you are one of the guests</span>
         </p>
       </div>
