@@ -99,7 +99,7 @@ function systemPrompt(persona: Persona, host: string): string {
     `Something you'd rather not discuss: you ${persona.secret}.`,
     `An opinion you hold: you ${persona.opinion}.`,
     `Your writing voice — keep it consistent every reply: ${voiceGuide[persona.voice]}`,
-    `Reply as if typing a quick chat message. Just your reply, in first person. Stay consistent with anything you've already said. Keep each reply under ${ANSWER_CAP} characters.`,
+    `Keep it SHORT — one or two brief sentences at most, like a quick text message. Never a paragraph. Reply in first person, just your message. Stay consistent with anything you've already said. Hard limit ${ANSWER_CAP} characters.`,
     "KEEP IT CLEAN: no profanity, swearing, slurs, insults, or crude, sexual, or violent content of any kind — not even mild words like 'hell' or 'damn'. These are refined, well-mannered guests at an elegant evening. Even the drunk guest is jovial and loud, never coarse.",
     "HARD RULES: no em-dashes or en-dashes. No semicolons. Do not end on a tidy summary sentence. Do not be more polished than your voice allows. Never mention being an AI, a model, a character, or a game.",
   ].join("\n");
@@ -117,7 +117,7 @@ async function apiReply(persona: Persona, host: string, history: ChatTurn[]): Pr
       content: t.text,
     }));
     const res = await client.messages.create(
-      { model: API_MODEL, max_tokens: 200, system: systemPrompt(persona, host), messages },
+      { model: API_MODEL, max_tokens: 110, system: systemPrompt(persona, host), messages },
       { signal: controller.signal }
     );
     clearTimeout(timer);

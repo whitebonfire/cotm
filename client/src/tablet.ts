@@ -69,6 +69,9 @@ export class Tablet {
 
   private interview: InterviewView = { status: "idle", messages: [], typing: false };
   private denied = "";
+  /** Earliest time the next question is allowed — the between-questions cooldown. */
+  private cooldownUntil = 0;
+  private cooldownTimer: ReturnType<typeof setInterval> | null = null;
   /** Set by main. onInterview opens a chat with a guest; onAsk sends a typed
    *  question; onCloseInterview ends the chat. */
   onInterview: ((id: string) => void) | null = null;
@@ -141,8 +144,19 @@ export class Tablet {
   interviewOpen(target: string, name: string) {
     this.interview = { status: "chat", target, name, messages: [], typing: false };
     this.denied = "";
+    this.clearCooldown();
     this.render();
     this.focusInput();
+  }
+
+  private get onCooldown(): boolean {
+    return Date.now() < this.cooldownUntil;
+  }
+
+  private clearCooldown() {
+    this.cooldownUntil = 0;
+    if (this.cooldownTimer) clearInterval(this.cooldownTimer);
+    this.cooldownTimer = null;
   }
 
   /** Locally echo the Detective's own question, then show the guest "typing". */
@@ -158,13 +172,40 @@ export class Tablet {
     this.render();
   }
 
-  interviewMsg(msg: { name: string; text: string; expression: Expression }) {
+  interviewMsg(msg: { name: string; text: string; expression: Expression; cooldownMs?: number }) {
     if (this.interview.status !== "chat") return;
     this.interview.typing = false;
     this.interview.expression = msg.expression;
     this.interview.messages.push({ from: "guest", text: msg.text });
+
+    // Between-questions cooldown: lock the input and count it down.
+    const cd = msg.cooldownMs ?? 0;
+    this.clearCooldown();
+    if (cd > 0) {
+      this.cooldownUntil = Date.now() + cd;
+      this.cooldownTimer = setInterval(() => {
+        if (this.onCooldown) {
+          this.updateCooldownDisplay();
+        } else {
+          this.clearCooldown();
+          this.render();
+          this.focusInput();
+        }
+      }, 500);
+    }
     this.render();
-    this.focusInput();
+  }
+
+  /** Update just the input placeholder/button during cooldown, without a full
+   *  re-render (which would blow away the message list scroll each tick). */
+  private updateCooldownDisplay() {
+    const input = this.screenEl.querySelector(".chat-input") as HTMLInputElement | null;
+    const send = this.screenEl.querySelector(".chat-send") as HTMLButtonElement | null;
+    if (!input || !send) return;
+    const left = Math.ceil((this.cooldownUntil - Date.now()) / 1000);
+    input.placeholder = `wait ${left}s before the next question…`;
+    input.disabled = true;
+    send.disabled = true;
   }
 
   interviewDenied(reason: string) {
@@ -175,6 +216,7 @@ export class Tablet {
   /** Called when the chat ends (back button, or server closed it). */
   private closeInterview(tellServer = true) {
     this.interview = { status: "idle", messages: [], typing: false };
+    this.clearCooldown();
     if (tellServer) this.onCloseInterview?.();
     this.render();
   }
@@ -239,7 +281,7 @@ export class Tablet {
 
   private sendQuestion() {
     const input = this.screenEl.querySelector(".chat-input") as HTMLInputElement | null;
-    if (!input || this.interview.status !== "chat" || this.interview.typing) return;
+    if (!input || this.interview.status !== "chat" || this.interview.typing || this.onCooldown) return;
     const text = input.value.trim();
     if (!text) return;
     input.value = "";
@@ -261,6 +303,9 @@ export class Tablet {
     if (this.interview.status === "chat") {
       const entry = this.roster.find((e) => e.id === this.interview.target);
       const face = this.faceHtml(entry, this.interview.expression ?? "neutral", 56);
+      const cooling = this.onCooldown;
+      const cooldownLeft = Math.ceil((this.cooldownUntil - Date.now()) / 1000);
+      const locked = this.interview.typing || cooling;
       const bubbles = this.interview.messages
         .map((m) =>
           m.from === "detective"
@@ -284,8 +329,10 @@ export class Tablet {
               : ""}
           </div>
           <div class="chat-compose">
-            <input class="chat-input" type="text" placeholder="type a question…" maxlength="320" ${this.interview.typing ? "disabled" : ""} />
-            <button class="chat-send" data-send ${this.interview.typing ? "disabled" : ""}>ask</button>
+            <input class="chat-input" type="text" maxlength="180"
+              placeholder="${cooling ? `wait ${cooldownLeft}s before the next question…` : "type a question…"}"
+              ${locked ? "disabled" : ""} />
+            <button class="chat-send" data-send ${locked ? "disabled" : ""}>ask</button>
           </div>
         </div>`;
       return;

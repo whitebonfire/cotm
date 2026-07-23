@@ -233,7 +233,7 @@ export function authoredAnswer(name: string, persona: Persona, host: string): st
 
 /** Rough character cap — the Spy's answer is capped to about this, so a wall of
  *  text can't itself become the tell. */
-export const ANSWER_CAP = 320;
+export const ANSWER_CAP = 180;
 
 /**
  * Authored reply to an ARBITRARY typed question, in the guest's voice. This is

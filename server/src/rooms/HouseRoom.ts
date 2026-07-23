@@ -26,9 +26,16 @@ const REPLY_MIN_MS = Number(process.env.COTM_REPLY_MIN_MS) || 2500;
 const REPLY_MAX_MS = Number(process.env.COTM_REPLY_MAX_MS) || 14000;
 const REPLY_PER_CHAR_MS = process.env.COTM_REPLY_PER_CHAR_MS ? Number(process.env.COTM_REPLY_PER_CHAR_MS) : 55;
 
+/** After each answer, the Detective must wait this long before the next
+ *  question — so an interview is a paced exchange, not a rapid-fire barrage.
+ *  (Explicit env parse so 0 is honoured, for tests.) */
+const ASK_COOLDOWN_MS =
+  process.env.COTM_ASK_COOLDOWN_MS !== undefined ? Number(process.env.COTM_ASK_COOLDOWN_MS) : 20000;
+
 /** Auto-close an interview the Detective has gone quiet on, so a human target
- *  isn't pinned in the chat (and on autopilot) forever. */
-const INTERVIEW_IDLE_MS = 30000;
+ *  isn't pinned in the chat (and on autopilot) forever. Comfortably longer than
+ *  the ask cooldown, so it doesn't fire mid-exchange. */
+const INTERVIEW_IDLE_MS = ASK_COOLDOWN_MS + 30000;
 
 interface Interview {
   detective: string; // sessionId asking
@@ -36,6 +43,8 @@ interface Interview {
   humanTarget: string | null; // sessionId if the target is a person
   history: ChatTurn[]; // the conversation so far
   busy: boolean; // a reply is pending (NPC generating, or human typing)
+  /** Earliest time the next question is allowed (cooldown after each answer). */
+  nextAskAt: number;
   lastActivity: number;
 }
 
@@ -225,6 +234,7 @@ export class HouseRoom extends Room<HouseState> {
       humanTarget: this.driverOf.get(target) ?? null,
       history: [],
       busy: false,
+      nextAskAt: 0, // the first question is free
       lastActivity: Date.now(),
     };
     this.interviews.set(client.sessionId, interview);
@@ -247,6 +257,8 @@ export class HouseRoom extends Room<HouseState> {
   private askQuestion(client: Client, text: string) {
     const interview = this.interviews.get(client.sessionId);
     if (!interview || interview.busy) return;
+    // Enforce the between-questions cooldown server-side (the client gates too).
+    if (Date.now() < interview.nextAskAt) return;
     const q = scrub(text).slice(0, ANSWER_CAP);
     if (!q) return;
 
@@ -304,7 +316,9 @@ export class HouseRoom extends Room<HouseState> {
   private deliverGuestReply(interview: Interview, text: string, expression: string) {
     interview.history.push({ role: "guest", text });
     interview.busy = false;
-    interview.lastActivity = Date.now();
+    const now = Date.now();
+    interview.lastActivity = now;
+    interview.nextAskAt = now + ASK_COOLDOWN_MS; // wait before the next question
     const detective = this.clients.find((c) => c.sessionId === interview.detective);
     const person = this.state.people.get(interview.target);
     detective?.send("interview_msg", {
@@ -312,6 +326,7 @@ export class HouseRoom extends Room<HouseState> {
       name: person?.name ?? "",
       text,
       expression,
+      cooldownMs: ASK_COOLDOWN_MS,
     });
   }
 
