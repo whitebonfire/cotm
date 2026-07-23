@@ -5,6 +5,7 @@ import type { HouseState, Person } from "../../server/src/schema/GameState";
 import { Action, SPEED, resolveCollisions, roomAt } from "../../server/src/world/house";
 import { buildHouse, buildRoomLabels, buildFurniture } from "./house";
 import { buildPerson, animatePerson, type PersonRig } from "./person";
+import { Tablet, type RosterEntry } from "./tablet";
 
 const EYE = 1.25;
 const CAM_DIST = 6.0;
@@ -54,6 +55,17 @@ const { colliders } = buildHouse(scene);
 buildFurniture(scene);
 buildRoomLabels(scene);
 
+const tablet = new Tablet(scene);
+tablet.setAspect(window.innerWidth / window.innerHeight);
+
+/** Transient HUD line, e.g. "camera placed". Cleared after a couple seconds. */
+let flash = "";
+let flashUntil = 0;
+const setFlash = (msg: string) => {
+  flash = msg;
+  flashUntil = elapsed + 2.2;
+};
+
 // ---------------------------------------------------------------- bodies
 
 interface Body {
@@ -89,16 +101,67 @@ let camPitch = 0.3;
 let locked = false;
 
 window.addEventListener("keydown", (e) => {
-  if (!keys.has(e.code) && e.code === "KeyE" && room) room.send("act");
+  const fresh = !keys.has(e.code);
   keys.add(e.code);
   if (e.code === "Space") e.preventDefault();
+  if (!fresh || !room) return;
+
+  switch (e.code) {
+    case "KeyE":
+      if (!tablet.up) room.send("act");
+      break;
+    case "KeyQ":
+      // Raising the tablet frees the cursor (for the roster buttons) and stops
+      // you moving — you're standing still, looking at a screen.
+      tablet.toggle();
+      if (tablet.up) {
+        refreshRoster();
+        document.exitPointerLock();
+      } else if (!locked) {
+        renderer.domElement.requestPointerLock();
+      }
+      break;
+    case "KeyF":
+      if (!tablet.up) {
+        // Drop the camera where you stand, looking the way you face.
+        tablet.place(localPos.x, localPos.z, -Math.sin(camYaw), -Math.cos(camYaw));
+        setFlash("📷 camera placed — raise the tablet (Q) to watch");
+      }
+      break;
+    case "ArrowLeft":
+      if (tablet.up) { tablet.cycle(-1); e.preventDefault(); }
+      break;
+    case "ArrowRight":
+      if (tablet.up) { tablet.cycle(1); e.preventDefault(); }
+      break;
+    case "Escape":
+      tablet.close();
+      break;
+  }
 });
 window.addEventListener("keyup", (e) => keys.delete(e.code));
 window.addEventListener("blur", () => keys.clear());
 
 renderer.domElement.addEventListener("click", () => {
-  if (room && !locked) renderer.domElement.requestPointerLock();
+  // Don't grab the cursor back while the tablet is up — it's needed for the UI.
+  if (room && !locked && !tablet.up) renderer.domElement.requestPointerLock();
 });
+
+/** Rebuild the roster from whoever's currently at the party. */
+function refreshRoster() {
+  const entries: RosterEntry[] = [];
+  bodies.forEach((body, id) => {
+    entries.push({
+      id,
+      name: body.person.name,
+      skin: body.person.skin,
+      age: body.person.age,
+      acc: body.person.acc,
+    });
+  });
+  entries.sort((a, b) => a.name.localeCompare(b.name));
+  tablet.setRoster(entries, myBody ?? "");
+}
 
 document.addEventListener("pointerlockchange", () => {
   locked = document.pointerLockElement === renderer.domElement;
@@ -113,8 +176,10 @@ document.addEventListener("mousemove", (e) => {
 });
 
 window.addEventListener("resize", () => {
-  camera.aspect = window.innerWidth / window.innerHeight;
+  const aspect = window.innerWidth / window.innerHeight;
+  camera.aspect = aspect;
   camera.updateProjectionMatrix();
+  tablet.setAspect(aspect);
   renderer.setSize(window.innerWidth, window.innerHeight);
 });
 
@@ -226,6 +291,8 @@ let sendAccum = 0;
 let elapsed = 0;
 
 function currentInput() {
+  // Hands are on the tablet — you don't walk while watching a screen.
+  if (tablet.up) return { f: 0, r: 0, yaw: camYaw };
   const f = (keys.has("KeyW") ? 1 : 0) - (keys.has("KeyS") ? 1 : 0);
   const r = (keys.has("KeyD") ? 1 : 0) - (keys.has("KeyA") ? 1 : 0);
   return { f, r, yaw: camYaw };
@@ -327,15 +394,28 @@ function tick() {
   if (room) {
     const here = roomAt(localPos.x, localPos.z);
     const doing = self ? ACTION_NAME[self.person.action] ?? "" : "";
+    const hint = tablet.up
+      ? `watching — <b>Q</b> to lower the tablet`
+      : locked
+        ? `<b>F</b> camera · <b>Q</b> tablet · <b>E</b> join in`
+        : `<b>click</b> to look around`;
+    const flashLine = elapsed < flashUntil ? `<span style="color:#d8b46a">${flash}</span>` : "";
     hud.innerHTML = [
-      `<b>🔎 clues of the mind</b> — milestone 3`,
+      `<b>🔎 clues of the mind</b> — milestone 4`,
       `<b>${here?.name ?? "…"}</b> · ${bodies.size} guests`,
       `you are <b>${self?.person.name ?? "…"}</b>, ${doing}`,
-      locked ? `<b>E</b> to join in at a spot` : `<b>click</b> to look around`,
-    ].join("<br />");
+      hint,
+      flashLine,
+    ].filter(Boolean).join("<br />");
   }
 
-  renderer.render(scene, camera);
+  // The camera feed IS the view while you watch it — you're blind to where you
+  // actually stand. Otherwise render the detective's own third-person view.
+  if (tablet.feedActive) {
+    renderer.render(scene, tablet.feedCam);
+  } else {
+    renderer.render(scene, camera);
+  }
 }
 
 tick();

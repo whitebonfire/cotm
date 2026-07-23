@@ -26,7 +26,7 @@ export interface Look {
   height: number;
 }
 
-const SKINS = [0xf1d3b6, 0xe2b48c, 0xc68a63, 0x8d5a3b, 0x5c3a25, 0x3d2517];
+export const SKINS = [0xf1d3b6, 0xe2b48c, 0xc68a63, 0x8d5a3b, 0x5c3a25, 0x3d2517];
 
 /** Metres of travel per full leg cycle. A cycle is two steps (~0.75m each). */
 const STRIDE_METRES = 1.5;
