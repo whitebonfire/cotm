@@ -76,6 +76,20 @@ const ROUND_MS = process.env.COTM_ROUND_MS !== undefined ? Number(process.env.CO
 /** The Detective gets two accusations (SOW §2.1). */
 const MAX_GUESSES = 2;
 
+/** How many steal-and-deliver tasks the Spy must finish to win (SOW §3). */
+const NUM_TASKS = process.env.COTM_NUM_TASKS !== undefined ? Number(process.env.COTM_NUM_TASKS) : 3;
+/** How close the Spy must be to a guest to steal from / deliver to them. */
+const TASK_RANGE = 1.8;
+
+const ITEM_NAMES = ["", "purse", "necklace", "monocle", "cane", "brooch", "pocket-watch"];
+
+interface Task {
+  item: number; // accessory id (1-6)
+  fromBody: string; // steal it from here
+  toBody: string; // deliver it to here
+  state: "pending" | "carrying" | "done";
+}
+
 /** Bodies at the party. The Spy will be one of these, not a thirteenth guest. */
 export const PARTY_SIZE = 12;
 
@@ -140,6 +154,8 @@ export class HouseRoom extends Room<HouseState> {
 
   // ---- the round
   private roundEndsAt = 0;
+  /** The Spy's steal-and-deliver tasks — server memory, sent only to the Spy. */
+  private tasks: Task[] = [];
 
   onCreate() {
     this.setState(new HouseState());
@@ -178,6 +194,10 @@ export class HouseRoom extends Room<HouseState> {
       if (!body) return;
       const person = this.state.people.get(body);
       if (!person) return;
+
+      // For the Spy, E first tries a task (steal/deliver a nearby item); only if
+      // there's nothing to do does it fall through to the camouflage join-in.
+      if (this.trySpyTask(client.sessionId)) return;
 
       if (this.held.has(client.sessionId)) {
         this.held.delete(client.sessionId);
@@ -553,8 +573,86 @@ export class HouseRoom extends Room<HouseState> {
     this.state.round.guessesLeft = MAX_GUESSES;
     this.state.round.secondsLeft = Math.ceil(ROUND_MS / 1000);
     this.roundEndsAt = Date.now() + ROUND_MS;
+    this.generateTasks();
     this.broadcast("round_start", { seconds: this.state.round.secondsLeft });
     console.log(`[house] round started (${this.state.round.secondsLeft}s)`);
+  }
+
+  /** Deal the Spy three steal-and-deliver tasks among the NPCs, and send them —
+   *  only to the Spy (SOW §3, §7.1). Sources are NPCs wearing an accessory. */
+  private generateTasks() {
+    const spy = this.sessionWithRole("spy");
+    const spyBody = spy ? this.bodyOf.get(spy) : null;
+    const detBody = this.bodyOf.get(this.sessionWithRole("detective") ?? "");
+    const isNpc = (id: string) => id !== spyBody && id !== detBody;
+
+    const withItems = [...this.state.people.entries()]
+      .filter(([id, p]) => isNpc(id) && p.acc > 0)
+      .sort(() => Math.random() - 0.5);
+    const recipients = [...this.state.people.keys()].filter(isNpc).sort(() => Math.random() - 0.5);
+
+    this.tasks = [];
+    for (const [fromBody, p] of withItems) {
+      if (this.tasks.length >= NUM_TASKS) break;
+      const toBody = recipients.find((r) => r !== fromBody && !this.tasks.some((t) => t.toBody === r));
+      if (!toBody) continue;
+      this.tasks.push({ item: p.acc, fromBody, toBody, state: "pending" });
+    }
+    this.sendTasks();
+  }
+
+  private sendTasks() {
+    const spy = this.sessionWithRole("spy");
+    const client = spy ? this.clients.find((c) => c.sessionId === spy) : null;
+    if (!client) return;
+    client.send("tasks", {
+      tasks: this.tasks.map((t) => ({
+        item: t.item,
+        itemName: ITEM_NAMES[t.item] ?? "item",
+        fromBody: t.fromBody,
+        fromName: this.state.people.get(t.fromBody)?.name ?? "",
+        toBody: t.toBody,
+        toName: this.state.people.get(t.toBody)?.name ?? "",
+        state: t.state,
+      })),
+    });
+  }
+
+  /** The Spy tries to steal from / deliver to a nearby guest. Returns true if it
+   *  did a task action (so `act` doesn't also do the camouflage join-in). */
+  private trySpyTask(session: string): boolean {
+    if (this.roles.get(session) !== "spy" || this.state.round.phase !== 1) return false;
+    const body = this.bodyOf.get(session);
+    const me = body ? this.state.people.get(body) : null;
+    if (!me) return false;
+
+    const near = (id: string) => {
+      const p = this.state.people.get(id);
+      return p ? Math.hypot(p.x - me.x, p.z - me.z) < TASK_RANGE : false;
+    };
+
+    // Deliver first (finishing a task feels better than picking up another).
+    for (const t of this.tasks) {
+      if (t.state === "carrying" && near(t.toBody)) {
+        t.state = "done";
+        this.sendTasks();
+        if (this.tasks.every((x) => x.state === "done")) {
+          this.endRound("spy", "The spy finished the job and slipped away.");
+        }
+        return true;
+      }
+    }
+    // Steal.
+    for (const t of this.tasks) {
+      if (t.state === "pending" && near(t.fromBody)) {
+        t.state = "carrying";
+        const victim = this.state.people.get(t.fromBody);
+        if (victim) victim.acc = 0; // the item visibly vanishes from the robbed guest
+        this.sendTasks();
+        return true;
+      }
+    }
+    return false;
   }
 
   private makeGuess(client: Client, target: string) {

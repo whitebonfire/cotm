@@ -16,6 +16,8 @@ const MAGNIFY_SPEED = 2.1;
 const BASE_FOV = 58;
 /** Zoomed field of view while looking through the magnifying glass. */
 const MAG_FOV = 28;
+/** Must match TASK_RANGE on the server. */
+const TASK_RANGE = 1.8;
 
 const ACTION_NAME: Record<number, string> = {
   [Action.IDLE]: "standing about",
@@ -79,6 +81,44 @@ let blackoutUntil = 0;
 const blackout = document.getElementById("blackout") as HTMLDivElement;
 const magVignette = document.getElementById("magvignette") as HTMLDivElement;
 const abilityBar = document.getElementById("abilities") as HTMLDivElement;
+const tasksPanel = document.getElementById("tasks") as HTMLDivElement;
+const taskPrompt = document.getElementById("taskprompt") as HTMLDivElement;
+
+interface SpyTask {
+  item: number;
+  itemName: string;
+  fromBody: string;
+  fromName: string;
+  toBody: string;
+  toName: string;
+  state: "pending" | "carrying" | "done";
+}
+/** The Spy's tasks (empty for the Detective). */
+let tasks: SpyTask[] = [];
+
+const DOT: Record<string, string> = { pending: "○", carrying: "◈", done: "●" };
+
+function renderTasks() {
+  if (myRole !== "spy" || tasks.length === 0) {
+    tasksPanel.classList.add("hidden");
+    return;
+  }
+  const done = tasks.filter((t) => t.state === "done").length;
+  tasksPanel.classList.remove("hidden");
+  tasksPanel.innerHTML =
+    `<div class="th"><span>🕶 YOUR TASKS</span><span>${done}/${tasks.length}</span></div>` +
+    tasks
+      .map((t) => {
+        const body =
+          t.state === "carrying"
+            ? `carrying the <b>${t.itemName}</b> — give it to <b>${t.toName}</b>`
+            : t.state === "done"
+              ? `${t.itemName}: <b>${t.fromName}</b> → <b>${t.toName}</b>`
+              : `steal the <b>${t.itemName}</b> from <b>${t.fromName}</b>`;
+        return `<div class="task ${t.state}"><span class="dot">${DOT[t.state]}</span><span>${body}</span></div>`;
+      })
+      .join("");
+}
 
 let lastAbilityHtml = "";
 /** Render the ability bar for the current role (only touches the DOM on change). */
@@ -355,6 +395,9 @@ function clearWorld() {
   magnify = false;
   hackReadyAt = 0;
   blackoutUntil = 0;
+  tasks = [];
+  renderTasks();
+  taskPrompt.classList.add("hidden");
   selfRing.visible = false;
   tablet.close();
   roleOverlay.classList.add("hidden");
@@ -470,6 +513,12 @@ function wire(room: Room<HouseState>) {
     tablet.interviewClosedByServer();
   });
 
+  // ---- the spy's tasks (SOW §3)
+  room.onMessage("tasks", (m: { tasks: SpyTask[] }) => {
+    tasks = m.tasks;
+    renderTasks();
+  });
+
   // ---- the round (SOW §2, §7)
   tablet.onGuess = (id: string) => room.send("guess", { target: id });
   room.onMessage("round_start", () => setFlash("the round has begun — find the spy"));
@@ -501,6 +550,12 @@ function wire(room: Room<HouseState>) {
       localPos.set(person.x, person.y, person.z);
       localYaw = person.yaw;
     }
+    // When a guest's accessory is stolen (acc -> 0), it vanishes from them — a
+    // clue the Detective can spot (SOW §3).
+    $(person).listen("acc", (val: number) => {
+      const b = bodies.get(id);
+      if (b?.rig.accessory) b.rig.accessory.visible = val > 0;
+    });
   });
 
   $(room.state).people.onRemove((_person: Person, id: string) => {
@@ -681,6 +736,21 @@ function tick() {
   magVignette.style.opacity = magnify ? "1" : "0";
   blackout.style.opacity = Date.now() < blackoutUntil ? "1" : "0";
   updateAbilityBar();
+
+  // Spy task prompt: near a guest you can steal from or deliver to.
+  let prompt = "";
+  if (myRole === "spy" && room && room.state.round.phase === 1 && tasks.length && !beingInterviewed) {
+    const near = (id: string) => {
+      const p = room!.state.people.get(id);
+      return p ? Math.hypot(p.x - localPos.x, p.z - localPos.z) < TASK_RANGE : false;
+    };
+    const carry = tasks.find((t) => t.state === "carrying" && near(t.toBody));
+    const steal = tasks.find((t) => t.state === "pending" && near(t.fromBody));
+    if (carry) prompt = `<kbd>E</kbd> give the ${carry.itemName} to ${carry.toName}`;
+    else if (steal) prompt = `<kbd>E</kbd> steal the ${steal.itemName} from ${steal.fromName}`;
+  }
+  taskPrompt.innerHTML = prompt;
+  taskPrompt.classList.toggle("hidden", !prompt);
 
   if (room) {
     // Keep the tablet's guess panel in step with the round.

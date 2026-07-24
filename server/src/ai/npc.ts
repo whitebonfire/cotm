@@ -2,6 +2,11 @@ import { Person } from "../schema/GameState.js";
 import { Action, SPEED, resolveCollisions, roomAt } from "../world/house.js";
 import { ANCHORS, routeTo, type Anchor } from "../world/nav.js";
 
+/** NPC walking speed. Normally the same as a player's, so a moving guest can't
+ *  be outrun; a test hook (COTM_NPC_SPEED_MUL) can slow them for deterministic
+ *  chase tests. Never set below play in production. */
+const NPC_SPEED = SPEED * (Number(process.env.COTM_NPC_SPEED_MUL) || 1);
+
 /** Accessory ids. Some of these become Spy targets at milestone 7. */
 export const ACC = {
   NONE: 0,

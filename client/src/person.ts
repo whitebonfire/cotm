@@ -45,6 +45,8 @@ export interface PersonRig {
   book: THREE.Mesh;
   /** A glass, held in the right hand. */
   glass: THREE.Object3D;
+  /** The worn accessory, if any — hidden when a Spy steals it (task, SOW §3). */
+  accessory: THREE.Object3D | null;
   /** Random per body, so identical actions don't tick in lockstep. */
   phase: number;
   baseLean: number;
@@ -180,33 +182,37 @@ export function buildPerson(look: Look): PersonRig {
   // attached in named, findable places rather than baked into the mesh.
   const gold = new THREE.MeshStandardMaterial({ color: 0xd8b46a, roughness: 0.3, metalness: 0.7 });
 
+  // The accessory is kept as a reference so it can vanish when the Spy steals it
+  // (rig.accessory, toggled from the synced acc field). Its shape is the
+  // Detective's clue to which guest a task targets.
+  let accessory: THREE.Object3D | null = null;
   if (look.acc === 1) {
     const purse = new THREE.Mesh(new THREE.BoxGeometry(0.14, 0.12, 0.06), new THREE.MeshStandardMaterial({ color: 0x5a2d3a, roughness: 0.6 }));
     purse.position.y = -0.62;
     purse.castShadow = true;
-    armL.add(purse);
+    armL.add((accessory = purse));
   } else if (look.acc === 2) {
     const necklace = new THREE.Mesh(new THREE.TorusGeometry(0.09, 0.015, 6, 14), gold);
     necklace.rotation.x = Math.PI / 2;
     necklace.position.y = 0.52;
-    torso.add(necklace);
+    torso.add((accessory = necklace));
   } else if (look.acc === 3) {
     const monocle = new THREE.Mesh(new THREE.TorusGeometry(0.045, 0.01, 6, 12), gold);
     monocle.position.set(0.07, 0.15, 0.13);
-    head.add(monocle);
+    head.add((accessory = monocle));
   } else if (look.acc === 4) {
     const cane = new THREE.Mesh(new THREE.CylinderGeometry(0.015, 0.015, 0.9, 6), new THREE.MeshStandardMaterial({ color: 0x3a2418, roughness: 0.6 }));
     cane.position.set(0.06, -0.75, 0.05);
-    armR.add(cane);
+    armR.add((accessory = cane));
   } else if (look.acc === 5) {
     const brooch = new THREE.Mesh(new THREE.SphereGeometry(0.035, 8, 6), gold);
     brooch.position.set(0.15, 0.46, 0.13);
-    torso.add(brooch);
+    torso.add((accessory = brooch));
   } else if (look.acc === 6) {
     const watch = new THREE.Mesh(new THREE.CylinderGeometry(0.04, 0.04, 0.012, 10), gold);
     watch.rotation.x = Math.PI / 2;
     watch.position.set(-0.1, 0.2, 0.14);
-    torso.add(watch);
+    torso.add((accessory = watch));
   }
 
   // ---- held objects. Real things now, not a red box: a leather book and a
@@ -245,7 +251,7 @@ export function buildPerson(look: Look): PersonRig {
   torso.rotation.x = baseLean;
 
   return {
-    group, legL, legR, armL, armR, torso, head, book, glass,
+    group, legL, legR, armL, armR, torso, head, book, glass, accessory,
     phase: Math.random() * Math.PI * 2,
     baseLean,
     stride: 0,

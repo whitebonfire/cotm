@@ -17,7 +17,8 @@
     "test:house": "npm run build:server && node scripts/house-check.mjs",
     "test:interview": "node scripts/interview-test.mjs",
     "test:abilities": "node scripts/abilities-test.mjs",
-    "test:round": "node scripts/round-test.mjs"
+    "test:round": "node scripts/round-test.mjs",
+    "test:tasks": "node scripts/tasks-test.mjs"
   },
   "engines": {
     "node": ">=22"
