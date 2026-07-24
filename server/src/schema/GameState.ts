@@ -42,6 +42,27 @@ export class Person extends Schema {
   @type("uint8") height: number = 128;
 }
 
+/**
+ * The round. Synced so both players see the same clock and outcome.
+ *
+ * Note what is NOT here: the Spy's identity. During play, nothing on this schema
+ * says who the Spy is — the Detective has to find them. Only once the round is
+ * over is the Spy revealed, via the round_over message (SOW §7.1).
+ */
+export class Round extends Schema {
+  /** 0 = lobby (waiting for both roles), 1 = playing, 2 = over. */
+  @type("uint8") phase: number = 0;
+  /** Seconds left on the clock while playing. */
+  @type("uint16") secondsLeft: number = 0;
+  /** Guesses the Detective has left. */
+  @type("uint8") guessesLeft: number = 2;
+  /** Once over: "detective" | "spy". Empty during play. */
+  @type("string") outcome: string = "";
+  /** Once over: a short why. */
+  @type("string") reason: string = "";
+}
+
 export class HouseState extends Schema {
   @type({ map: Person }) people = new MapSchema<Person>();
+  @type(Round) round = new Round();
 }

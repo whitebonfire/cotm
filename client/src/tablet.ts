@@ -19,8 +19,9 @@ import { SKINS } from "./person";
  */
 
 const PANELS = ["INTERVIEW", "CAMERA", "GUESS"] as const;
-export const CAMERA_PANEL = 1;
 export const INTERVIEW_PANEL = 0;
+export const CAMERA_PANEL = 1;
+export const GUESS_PANEL = 2;
 
 const ACC_NAME = ["", "a purse", "a necklace", "a monocle", "a cane", "a brooch", "a pocket-watch"];
 const AGE_NAME = ["late twenties", "forties", "sixties", "elderly"];
@@ -69,6 +70,12 @@ export class Tablet {
 
   private interview: InterviewView = { status: "idle", messages: [], typing: false };
   private denied = "";
+  // ---- the guess (SOW §2.1)
+  private roundPhase = 0; // 0 lobby, 1 playing, 2 over
+  private guessesLeft = 2;
+  /** Two-step accuse: first click arms, second confirms. */
+  private pendingGuess: string | null = null;
+  onGuess: ((id: string) => void) | null = null;
   /** When the guest's reply will be revealed — the fixed wait after a question. */
   private revealUntil = 0;
   private revealTimer: ReturnType<typeof setInterval> | null = null;
@@ -132,6 +139,14 @@ export class Tablet {
     this.roster = entries;
     this.myId = myId;
     if (this.up && this.panel !== CAMERA_PANEL) this.render();
+  }
+
+  setRound(phase: number, guessesLeft: number) {
+    if (phase === this.roundPhase && guessesLeft === this.guessesLeft) return;
+    this.roundPhase = phase;
+    this.guessesLeft = guessesLeft;
+    if (phase !== 1) this.pendingGuess = null;
+    if (this.up && this.panel === GUESS_PANEL) this.render();
   }
 
   // ---- interview (SOW §5): a live chat
@@ -249,6 +264,19 @@ export class Tablet {
         this.sendQuestion();
         return;
       }
+      const guess = el.closest("button[data-guess]") as HTMLElement | null;
+      if (guess) {
+        const id = guess.getAttribute("data-guess")!;
+        // Two-step: first click arms the accusation, second confirms.
+        if (this.pendingGuess === id) {
+          this.pendingGuess = null;
+          this.onGuess?.(id);
+        } else {
+          this.pendingGuess = id;
+        }
+        this.render();
+        return;
+      }
       if (el.closest("[data-back]")) this.closeInterview();
     });
 
@@ -337,15 +365,23 @@ export class Tablet {
   private rosterRows(interview: boolean): string {
     // The roster is everyone but you (main filters your body out) — you can't
     // question or accuse yourself, so there's no self row to disable.
+    const canAccuse = this.roundPhase === 1 && this.guessesLeft > 0;
     return this.roster
       .map((e) => {
         const swatch = `#${new THREE.Color(SKINS[e.skin % SKINS.length]).getHexString()}`;
         const detail = [AGE_NAME[e.age] ?? "", e.acc ? `with ${ACC_NAME[e.acc]}` : ""]
           .filter(Boolean)
           .join(", ");
-        const btn = interview
-          ? `<button data-interview="${e.id}">Interview</button>`
-          : `<button disabled>Accuse</button>`;
+        let btn: string;
+        if (interview) {
+          btn = `<button data-interview="${e.id}">Interview</button>`;
+        } else if (!canAccuse) {
+          btn = `<button disabled>Accuse</button>`;
+        } else if (this.pendingGuess === e.id) {
+          btn = `<button class="confirm" data-guess="${e.id}">Confirm?</button>`;
+        } else {
+          btn = `<button data-guess="${e.id}">Accuse</button>`;
+        }
         return `<li>
             <span class="face" style="background:${swatch}"></span>
             <span class="who"><b>${e.name}</b><span class="detail">${detail}</span></span>
@@ -377,10 +413,24 @@ export class Tablet {
       return;
     }
 
-    // Guess: the roster, with the action stubbed until roles are dealt (M7).
+    // Guess: accuse a guest of being the spy. Two guesses; wrong twice and the
+    // spy walks free.
+    const note =
+      this.roundPhase !== 1
+        ? `Accusing opens when the round begins.`
+        : this.guessesLeft <= 0
+          ? `No guesses left.`
+          : `Accuse the spy. <b>${this.guessesLeft}</b> guess${this.guessesLeft === 1 ? "" : "es"} left — wrong twice and they escape.`;
     this.screenEl.innerHTML =
-      `<div class="note">Guessing unlocks once roles are dealt.</div>` +
+      (this.denied ? `<div class="denied">${escapeHtml(this.denied)}</div>` : "") +
+      `<div class="note">${note}</div>` +
       `<ul class="roster">${this.rosterRows(false)}</ul>`;
+  }
+
+  guessDenied(reason: string) {
+    this.denied = reason;
+    this.pendingGuess = null;
+    this.render();
   }
 }
 

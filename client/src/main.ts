@@ -266,6 +266,26 @@ const playBtn = document.getElementById("play") as HTMLButtonElement;
 const hud = document.getElementById("hud") as HTMLDivElement;
 const roleOverlay = document.getElementById("roleoverlay") as HTMLDivElement;
 const roleBody = roleOverlay.querySelector(".role-body") as HTMLDivElement;
+const roundOverlay = document.getElementById("roundover") as HTMLDivElement;
+(roundOverlay.querySelector(".ro-again") as HTMLButtonElement).addEventListener("click", () =>
+  location.reload()
+);
+
+function showRoundOver(m: { outcome: string; reason: string; spyName: string }) {
+  const youWon =
+    (m.outcome === "detective" && myRole === "detective") ||
+    (m.outcome === "spy" && myRole === "spy");
+  const winnerEl = roundOverlay.querySelector(".ro-winner") as HTMLDivElement;
+  winnerEl.className = `ro-winner ${m.outcome}`;
+  winnerEl.textContent = m.outcome === "detective" ? "🔎 DETECTIVE WINS" : "🕶 SPY WINS";
+  (roundOverlay.querySelector(".ro-reason") as HTMLDivElement).textContent =
+    (youWon ? "You win. " : "You lose. ") + m.reason;
+  (roundOverlay.querySelector(".ro-spy") as HTMLDivElement).innerHTML = m.spyName
+    ? `the spy was <b>${m.spyName}</b>`
+    : "";
+  roundOverlay.classList.remove("hidden");
+  document.exitPointerLock();
+}
 
 /** Your role for the round. null until the server assigns it. The Spy has no
  *  tablet — only the Detective does (SOW §7.1 / tablet-is-detective-only). */
@@ -338,6 +358,7 @@ function clearWorld() {
   selfRing.visible = false;
   tablet.close();
   roleOverlay.classList.add("hidden");
+  roundOverlay.classList.add("hidden");
 }
 
 playBtn.addEventListener("click", async () => {
@@ -448,6 +469,17 @@ function wire(room: Room<HouseState>) {
     interviewBox.hide();
     tablet.interviewClosedByServer();
   });
+
+  // ---- the round (SOW §2, §7)
+  tablet.onGuess = (id: string) => room.send("guess", { target: id });
+  room.onMessage("round_start", () => setFlash("the round has begun — find the spy"));
+  room.onMessage("guess_wrong", (m: { name: string; guessesLeft: number }) =>
+    setFlash(`❌ ${m.name} was innocent — ${m.guessesLeft} guess${m.guessesLeft === 1 ? "" : "es"} left`)
+  );
+  room.onMessage("guess_denied", (m: { reason: string }) => tablet.guessDenied(m.reason));
+  room.onMessage("round_over", (m: { outcome: string; reason: string; spyName: string }) =>
+    showRoundOver(m)
+  );
 
   // ---- abilities
   room.onMessage("ability_used", (m: { id: string; cooldownMs: number; durationMs?: number }) => {
@@ -651,10 +683,18 @@ function tick() {
   updateAbilityBar();
 
   if (room) {
+    // Keep the tablet's guess panel in step with the round.
+    const round = room.state.round;
+    tablet.setRound(round.phase, round.guessesLeft);
+
     const here = roomAt(localPos.x, localPos.z);
     const doing = self ? ACTION_NAME[self.person.action] ?? "" : "";
     const roleTag =
       myRole === "detective" ? `🔎 <b>DETECTIVE</b>` : myRole === "spy" ? `🕶 <b>SPY</b>` : "";
+    const clock =
+      round.phase === 1
+        ? ` · ⏱ <b>${Math.floor(round.secondsLeft / 60)}:${String(round.secondsLeft % 60).padStart(2, "0")}</b>`
+        : "";
     const hint = tablet.up
       ? `watching — <b>Q</b> to lower the tablet`
       : !locked
@@ -664,7 +704,7 @@ function tick() {
           : `<b>H</b> hack · <b>E</b> join in at a spot`;
     const flashLine = elapsed < flashUntil ? `<span style="color:#d8b46a">${flash}</span>` : "";
     hud.innerHTML = [
-      `<b>🔎 clues of the mind</b> — milestone 6 ${roleTag}`,
+      `<b>🔎 clues of the mind</b> — milestone 7 ${roleTag}${clock}`,
       `<b>${here?.name ?? "…"}</b> · ${bodies.size} guests`,
       `you are <b>${self?.person.name ?? "…"}</b>, ${doing}`,
       hint,

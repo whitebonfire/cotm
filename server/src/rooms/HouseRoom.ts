@@ -71,6 +71,11 @@ const MAGNIFY_SPEED = 2.1;
 const HACK_DURATION_MS = 10000;
 const HACK_COOLDOWN_MS = 60000;
 
+/** The round clock (SOW §2, §4). Ten minutes; env-tunable for tests. */
+const ROUND_MS = process.env.COTM_ROUND_MS !== undefined ? Number(process.env.COTM_ROUND_MS) : 10 * 60 * 1000;
+/** The Detective gets two accusations (SOW §2.1). */
+const MAX_GUESSES = 2;
+
 /** Bodies at the party. The Spy will be one of these, not a thirteenth guest. */
 export const PARTY_SIZE = 12;
 
@@ -133,6 +138,9 @@ export class HouseRoom extends Room<HouseState> {
   // ---- abilities: per-player cooldowns, keyed by ability id -> ready-at time.
   private cooldowns = new Map<string, Map<string, number>>();
 
+  // ---- the round
+  private roundEndsAt = 0;
+
   onCreate() {
     this.setState(new HouseState());
     this.setPatchRate(50);
@@ -155,6 +163,11 @@ export class HouseRoom extends Room<HouseState> {
     // (in `input`), not one of these.
     this.onMessage("ability", (client: Client, msg: { id?: string }) => {
       this.useAbility(client, typeof msg?.id === "string" ? msg.id : "");
+    });
+
+    // The Detective's accusation (SOW §2.1).
+    this.onMessage("guess", (client: Client, msg: { target?: string }) => {
+      this.makeGuess(client, typeof msg?.target === "string" ? msg.target : "");
     });
 
     // Join in with whatever happens at the nearest anchor — read the book,
@@ -516,6 +529,78 @@ export class HouseRoom extends Room<HouseState> {
     const client = this.clients.find((c) => c.sessionId === sessionId);
     client?.send("your_role", { role });
     console.log(`[house] a player is the ${role}`);
+    this.maybeStartRound();
+  }
+
+  // ---------------------------------------------------------------- the round
+
+  private sessionWithRole(role: "detective" | "spy"): string | null {
+    for (const [s, r] of this.roles) if (r === role) return s;
+    return null;
+  }
+
+  /** The Spy's body id — server memory only, never synced (SOW §7.1). */
+  private spyBodyId(): string | null {
+    const spy = this.sessionWithRole("spy");
+    return spy ? this.bodyOf.get(spy) ?? null : null;
+  }
+
+  /** Start once there's a Detective and a Spy (the two-human game). */
+  private maybeStartRound() {
+    if (this.state.round.phase !== 0) return;
+    if (!this.sessionWithRole("detective") || !this.sessionWithRole("spy")) return;
+    this.state.round.phase = 1;
+    this.state.round.guessesLeft = MAX_GUESSES;
+    this.state.round.secondsLeft = Math.ceil(ROUND_MS / 1000);
+    this.roundEndsAt = Date.now() + ROUND_MS;
+    this.broadcast("round_start", { seconds: this.state.round.secondsLeft });
+    console.log(`[house] round started (${this.state.round.secondsLeft}s)`);
+  }
+
+  private makeGuess(client: Client, target: string) {
+    const round = this.state.round;
+    if (round.phase !== 1) return;
+    if (this.roles.get(client.sessionId) !== "detective") {
+      client.send("guess_denied", { reason: "Only the detective can accuse." });
+      return;
+    }
+    const person = this.state.people.get(target);
+    if (!person || target === this.bodyOf.get(client.sessionId)) {
+      client.send("guess_denied", { reason: "You can't accuse them." });
+      return;
+    }
+    if (round.guessesLeft <= 0) return;
+
+    if (target === this.spyBodyId()) {
+      this.endRound("detective", "The detective unmasked the spy.");
+      return;
+    }
+    round.guessesLeft -= 1;
+    // A wrong accusation. Tell the Detective; the Spy secretly learns they were
+    // suspected of nothing (an innocent NPC took the fall) — a small tell later.
+    client.send("guess_wrong", { target, name: person.name, guessesLeft: round.guessesLeft });
+    if (round.guessesLeft <= 0) {
+      this.endRound("spy", "The detective accused two innocents. The spy walks free.");
+    }
+  }
+
+  private endRound(outcome: "detective" | "spy", reason: string) {
+    const round = this.state.round;
+    if (round.phase === 2) return;
+    round.phase = 2;
+    round.outcome = outcome;
+    round.reason = reason;
+
+    // Now — and only now — the Spy is revealed.
+    const spyBody = this.spyBodyId();
+    const spy = spyBody ? this.state.people.get(spyBody) : null;
+    this.broadcast("round_over", {
+      outcome,
+      reason,
+      spyBody: spyBody ?? "",
+      spyName: spy?.name ?? "",
+    });
+    console.log(`[house] round over: ${outcome} — ${reason}`);
   }
 
   onLeave(client: Client) {
@@ -559,6 +644,14 @@ export class HouseRoom extends Room<HouseState> {
 
   private tick(dt: number) {
     const now = Date.now();
+
+    // ---- the round clock. Runout is a Detective win: the Spy failed to finish
+    // in time (SOW §2.1).
+    if (this.state.round.phase === 1) {
+      const left = Math.max(0, Math.ceil((this.roundEndsAt - now) / 1000));
+      if (left !== this.state.round.secondsLeft) this.state.round.secondsLeft = left;
+      if (left <= 0) this.endRound("detective", "Time ran out. The spy never finished the job.");
+    }
 
     // ---- auto-close idle interviews, so a human target isn't pinned in the
     // chat (and on autopilot) forever if the Detective wanders off.
