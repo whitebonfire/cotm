@@ -71,6 +71,29 @@ const MAGNIFY_SPEED = 2.1;
 const HACK_DURATION_MS = 10000;
 const HACK_COOLDOWN_MS = 60000;
 
+/** The Detective's `hide`: blend in as an ordinary guest, so the Spy's marker
+ *  on you goes dark and they lose track of who to snap/avoid (SOW §4.2). */
+const HIDE_DURATION_MS = 20000;
+const HIDE_COOLDOWN_MS = 60000;
+
+/** The Detective's `inspection`: seal the room you stand in. The Spy can't
+ *  steal or deliver in a sealed room until it lifts (SOW §4.2). */
+const SEAL_DURATION_MS = 30000;
+const SEAL_COOLDOWN_MS = 120000;
+
+/** The Spy's `impersonate`: move with a perfect NPC gait — while it's up, an
+ *  idle Spy fidgets like a guest instead of standing frozen (SOW §4.3). */
+const IMPERSONATE_DURATION_MS = 20000;
+const IMPERSONATE_COOLDOWN_MS = 50000;
+
+/** The Spy's `snap`: photograph the Detective for +1 minute on the clock
+ *  (SOW §4.3, §2.1). You must be close to the one person hunting you. The SOW
+ *  lists no cooldown; a short one is kept purely as a balance guard so a Spy
+ *  can't stand on the Detective and mint minutes (SOW §2.2). */
+const SNAP_RANGE = 3.0;
+const SNAP_BONUS_MS = 60000;
+const SNAP_COOLDOWN_MS = 20000;
+
 /** The round clock (SOW §2, §4). Ten minutes; env-tunable for tests. */
 const ROUND_MS = process.env.COTM_ROUND_MS !== undefined ? Number(process.env.COTM_ROUND_MS) : 10 * 60 * 1000;
 /** The Detective gets two accusations (SOW §2.1). */
@@ -156,6 +179,15 @@ export class HouseRoom extends Room<HouseState> {
   private roundEndsAt = 0;
   /** The Spy's steal-and-deliver tasks — server memory, sent only to the Spy. */
   private tasks: Task[] = [];
+
+  // ---- ability windows (server memory; there's one Detective and one Spy).
+  /** While < now, the Detective is visible to the Spy's marker; while > now,
+   *  they're hidden (the `hide` ability is up). */
+  private hideUntil = 0;
+  /** The Spy's `impersonate` window — idle ambient plays while > now. */
+  private impersonateUntil = 0;
+  /** The active `inspection` seal, or null. `room` is a world/house room id. */
+  private seal: { room: string; until: number } | null = null;
 
   onCreate() {
     this.setState(new HouseState());
@@ -449,7 +481,116 @@ export class HouseRoom extends Room<HouseState> {
       return;
     }
 
+    if (id === "hide") {
+      if (role !== "detective") {
+        client.send("ability_denied", { id, reason: "Only the detective can do that." });
+        return;
+      }
+      const left = this.cooldownReady(session, id) - now;
+      if (left > 0) {
+        client.send("ability_denied", { id, reason: `hide recharging (${Math.ceil(left / 1000)}s)` });
+        return;
+      }
+      this.setCooldown(session, id, HIDE_COOLDOWN_MS);
+      this.hideUntil = now + HIDE_DURATION_MS;
+      // The Spy's marker on the Detective goes dark for the duration.
+      this.sendDetectiveMark();
+      client.send("ability_used", { id, cooldownMs: HIDE_COOLDOWN_MS, durationMs: HIDE_DURATION_MS });
+      return;
+    }
+
+    if (id === "inspection") {
+      if (role !== "detective") {
+        client.send("ability_denied", { id, reason: "Only the detective can do that." });
+        return;
+      }
+      const left = this.cooldownReady(session, id) - now;
+      if (left > 0) {
+        client.send("ability_denied", { id, reason: `inspection recharging (${Math.ceil(left / 1000)}s)` });
+        return;
+      }
+      const body = this.bodyOf.get(session);
+      const me = body ? this.state.people.get(body) : null;
+      const room = me ? roomAt(me.x, me.z) : null;
+      if (!room) {
+        client.send("ability_denied", { id, reason: "Stand inside a room to seal it." });
+        return;
+      }
+      this.setCooldown(session, id, SEAL_COOLDOWN_MS);
+      this.seal = { room: room.id, until: now + SEAL_DURATION_MS };
+      // Everyone sees the seal go up (a visible cordon); the Spy learns a room
+      // just closed to them.
+      this.broadcast("seal", { room: room.id, name: room.name, ms: SEAL_DURATION_MS });
+      client.send("ability_used", { id, cooldownMs: SEAL_COOLDOWN_MS, durationMs: SEAL_DURATION_MS });
+      return;
+    }
+
+    if (id === "impersonate") {
+      if (role !== "spy") {
+        client.send("ability_denied", { id, reason: "Only the spy can do that." });
+        return;
+      }
+      const left = this.cooldownReady(session, id) - now;
+      if (left > 0) {
+        client.send("ability_denied", { id, reason: `impersonate recharging (${Math.ceil(left / 1000)}s)` });
+        return;
+      }
+      this.setCooldown(session, id, IMPERSONATE_COOLDOWN_MS);
+      this.impersonateUntil = now + IMPERSONATE_DURATION_MS;
+      client.send("ability_used", { id, cooldownMs: IMPERSONATE_COOLDOWN_MS, durationMs: IMPERSONATE_DURATION_MS });
+      return;
+    }
+
+    if (id === "snap") {
+      if (role !== "spy") {
+        client.send("ability_denied", { id, reason: "Only the spy can do that." });
+        return;
+      }
+      const left = this.cooldownReady(session, id) - now;
+      if (left > 0) {
+        client.send("ability_denied", { id, reason: `camera busy (${Math.ceil(left / 1000)}s)` });
+        return;
+      }
+      const body = this.bodyOf.get(session);
+      const me = body ? this.state.people.get(body) : null;
+      const detBody = this.detectiveBodyId();
+      const det = detBody ? this.state.people.get(detBody) : null;
+      if (!me || !det || Math.hypot(det.x - me.x, det.z - me.z) > SNAP_RANGE) {
+        client.send("ability_denied", { id, reason: "Get closer to the detective to snap them." });
+        return;
+      }
+      this.setCooldown(session, id, SNAP_COOLDOWN_MS);
+      // Buy time: push the deadline (and the visible clock) out by a minute.
+      this.roundEndsAt += SNAP_BONUS_MS;
+      this.state.round.secondsLeft = Math.max(0, Math.ceil((this.roundEndsAt - now) / 1000));
+      client.send("ability_used", { id, cooldownMs: SNAP_COOLDOWN_MS, bonusMs: SNAP_BONUS_MS });
+      const detClient = this.clients.find((c) => c.sessionId === this.sessionWithRole("detective"));
+      detClient?.send("photographed", { secondsAdded: Math.round(SNAP_BONUS_MS / 1000) });
+      return;
+    }
+
     client.send("ability_denied", { id, reason: "Unknown ability." });
+  }
+
+  /** The Detective's body id — server memory only, never synced. Symmetric to
+   *  spyBodyId(); used so the Spy can be told where their hunter is (SOW §4.3). */
+  private detectiveBodyId(): string | null {
+    const det = this.sessionWithRole("detective");
+    return det ? this.bodyOf.get(det) ?? null : null;
+  }
+
+  /**
+   * Tell the Spy which body is the Detective — the one asymmetry the disguise
+   * allows. The disguise hides the *Spy* from the *Detective*; letting the Spy
+   * see their hunter is the whole point of `snap` (SOW §4.3). While `hide` is
+   * up, the marker is withheld. Sent only to the Spy's client.
+   */
+  private sendDetectiveMark() {
+    const spy = this.sessionWithRole("spy");
+    const client = spy ? this.clients.find((c) => c.sessionId === spy) : null;
+    if (!client) return;
+    const hidden = Date.now() < this.hideUntil;
+    client.send("detective_mark", { body: hidden ? null : this.detectiveBodyId() });
   }
 
   /** Fill the house with guests, each with a persona and a writing voice. */
@@ -574,6 +715,8 @@ export class HouseRoom extends Room<HouseState> {
     this.state.round.secondsLeft = Math.ceil(ROUND_MS / 1000);
     this.roundEndsAt = Date.now() + ROUND_MS;
     this.generateTasks();
+    // The Spy is shown where the Detective is (their snap/avoid target).
+    this.sendDetectiveMark();
     this.broadcast("round_start", { seconds: this.state.round.secondsLeft });
     console.log(`[house] round started (${this.state.round.secondsLeft}s)`);
   }
@@ -630,10 +773,18 @@ export class HouseRoom extends Room<HouseState> {
       const p = this.state.people.get(id);
       return p ? Math.hypot(p.x - me.x, p.z - me.z) < TASK_RANGE : false;
     };
+    // A sealed room (Detective's inspection) blocks any steal or delivery whose
+    // guest is standing inside it, until the seal lifts (SOW §4.2).
+    const sealedFor = (id: string) => {
+      if (!this.seal || Date.now() >= this.seal.until) return false;
+      const p = this.state.people.get(id);
+      const room = p ? roomAt(p.x, p.z) : null;
+      return room?.id === this.seal.room;
+    };
 
     // Deliver first (finishing a task feels better than picking up another).
     for (const t of this.tasks) {
-      if (t.state === "carrying" && near(t.toBody)) {
+      if (t.state === "carrying" && near(t.toBody) && !sealedFor(t.toBody)) {
         t.state = "done";
         this.sendTasks();
         if (this.tasks.every((x) => x.state === "done")) {
@@ -644,7 +795,7 @@ export class HouseRoom extends Room<HouseState> {
     }
     // Steal.
     for (const t of this.tasks) {
-      if (t.state === "pending" && near(t.fromBody)) {
+      if (t.state === "pending" && near(t.fromBody) && !sealedFor(t.fromBody)) {
         t.state = "carrying";
         const victim = this.state.people.get(t.fromBody);
         if (victim) victim.acc = 0; // the item visibly vanishes from the robbed guest
@@ -751,6 +902,14 @@ export class HouseRoom extends Room<HouseState> {
       if (left <= 0) this.endRound("detective", "Time ran out. The spy never finished the job.");
     }
 
+    // ---- ability windows. When `hide` lifts, the Spy's marker on the Detective
+    // must come back (it can't self-restore clientside). A spent seal is dropped.
+    if (this.hideUntil && now >= this.hideUntil) {
+      this.hideUntil = 0;
+      this.sendDetectiveMark();
+    }
+    if (this.seal && now >= this.seal.until) this.seal = null;
+
     // ---- auto-close idle interviews, so a human target isn't pinned in the
     // chat (and on autopilot) forever if the Detective wanders off.
     for (const [det, interview] of this.interviews) {
@@ -793,6 +952,16 @@ export class HouseRoom extends Room<HouseState> {
       if (len < 0.001) {
         // Standing still: hold whatever they're pretending to do.
         person.action = this.held.get(sessionId) ?? Action.IDLE;
+        // Impersonate: while it's up, an idle Spy gently turns to look around —
+        // NPCs do this, and a frozen body is the clearest tell of a player who
+        // has stopped moving (SOW §4.3).
+        if (
+          this.roles.get(sessionId) === "spy" &&
+          now < this.impersonateUntil &&
+          !this.held.has(sessionId)
+        ) {
+          person.yaw += Math.sin(now / 900) * 0.03;
+        }
         continue;
       }
 

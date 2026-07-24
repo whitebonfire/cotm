@@ -76,6 +76,19 @@ let beingInterviewed = false;
 let magnify = false;
 /** Spy `hack` cooldown ends at this time (0 = ready). */
 let hackReadyAt = 0;
+/** Detective `hide`: cooldown ends / disguise lasts until these times. */
+let hideReadyAt = 0;
+let hideActiveUntil = 0;
+/** Detective `inspection` (seal a room): cooldown ends at this time. */
+let sealReadyAt = 0;
+/** Spy `impersonate`: cooldown ends / NPC gait lasts until these times. */
+let impersonateReadyAt = 0;
+let impersonateActiveUntil = 0;
+/** Spy `snap`: short balance cooldown ends at this time. */
+let snapReadyAt = 0;
+/** Spy only: the body that is the Detective, so the Spy can find their hunter.
+ *  Null when unknown or while the Detective is hidden (SOW §4.3). */
+let markBody: string | null = null;
 /** The lights are cut for us (a Spy hacked): black out until this time. */
 let blackoutUntil = 0;
 const blackout = document.getElementById("blackout") as HTMLDivElement;
@@ -121,17 +134,37 @@ function renderTasks() {
 }
 
 let lastAbilityHtml = "";
+/** One ability chip. `readyAt` drives a cooldown countdown; `activeUntil` counts
+ *  down a timed effect that's currently up; `on` is a plain toggle (no number).
+ *  Omit all three for an always-available tool. */
+function chip(key: string, label: string, readyAt = 0, activeUntil = 0, on = false) {
+  const now = Date.now();
+  const cd = Math.ceil((readyAt - now) / 1000);
+  const active = on || now < activeUntil;
+  const cls = active ? "active" : cd > 0 ? "cooling" : "";
+  const state =
+    !on && now < activeUntil
+      ? `<span class="cd">${Math.ceil((activeUntil - now) / 1000)}s</span>`
+      : !active && cd > 0
+        ? `<span class="cd">${cd}s</span>`
+        : "";
+  return `<div class="ab ${cls}"><kbd>${key}</kbd> ${label} ${state}</div>`;
+}
+
 /** Render the ability bar for the current role (only touches the DOM on change). */
 function updateAbilityBar() {
   let html = "";
   if (myRole === "detective") {
-    html = `<div class="ab ${magnify ? "active" : ""}"><kbd>G</kbd> magnifier</div>`;
+    html =
+      chip("G", "magnifier", 0, 0, magnify) +
+      chip("F", "camera") +
+      chip("H", "hide", hideReadyAt, hideActiveUntil) +
+      chip("R", "seal room", sealReadyAt);
   } else if (myRole === "spy") {
-    const left = Math.ceil((hackReadyAt - Date.now()) / 1000);
-    const cooling = left > 0;
-    html = `<div class="ab ${cooling ? "cooling" : ""}"><kbd>H</kbd> hack ${
-      cooling ? `<span class="cd">${left}s</span>` : "ready"
-    }</div>`;
+    html =
+      chip("H", "hack", hackReadyAt) +
+      chip("R", "impersonate", impersonateReadyAt, impersonateActiveUntil) +
+      chip("C", "snap", snapReadyAt);
   }
   if (html !== lastAbilityHtml) {
     abilityBar.innerHTML = html;
@@ -160,6 +193,25 @@ interface Body {
 }
 
 const bodies = new Map<string, Body>();
+
+/**
+ * The Spy-only marker floating over the Detective (SOW §4.3). A small red
+ * inverted pin so the Spy can pick their hunter out of the crowd — and lose
+ * them the moment the Detective uses `hide`. Added to the scene only for the
+ * Spy; hidden until `markBody` is known.
+ */
+const detectiveMarker = (() => {
+  const g = new THREE.Group();
+  const cone = new THREE.Mesh(
+    new THREE.ConeGeometry(0.16, 0.34, 4),
+    new THREE.MeshBasicMaterial({ color: 0xff3b3b, transparent: true, opacity: 0.85 })
+  );
+  cone.rotation.x = Math.PI; // point down at the head
+  g.add(cone);
+  g.visible = false;
+  scene.add(g);
+  return g;
+})();
 
 /** Which body is mine. Told to me by the server; nobody else's is knowable. */
 let myBody: string | null = null;
@@ -223,10 +275,32 @@ window.addEventListener("keydown", (e) => {
       }
       break;
     case "KeyH":
-      // Hack: the Spy cuts the lights for everyone but themselves.
-      if (myRole === "spy" && !beingInterviewed) {
+      if (beingInterviewed || tablet.up) break;
+      // Spy: hack the lights. Detective: hide — blend in as a guest.
+      if (myRole === "spy") {
         if (Date.now() < hackReadyAt) setFlash(`hack recharging (${Math.ceil((hackReadyAt - Date.now()) / 1000)}s)`);
         else room.send("ability", { id: "hack" });
+      } else if (myRole === "detective") {
+        if (Date.now() < hideReadyAt) setFlash(`hide recharging (${Math.ceil((hideReadyAt - Date.now()) / 1000)}s)`);
+        else room.send("ability", { id: "hide" });
+      }
+      break;
+    case "KeyR":
+      if (beingInterviewed || tablet.up) break;
+      // Detective: seal the room you're in. Spy: impersonate an NPC's gait.
+      if (myRole === "detective") {
+        if (Date.now() < sealReadyAt) setFlash(`inspection recharging (${Math.ceil((sealReadyAt - Date.now()) / 1000)}s)`);
+        else room.send("ability", { id: "inspection" });
+      } else if (myRole === "spy") {
+        if (Date.now() < impersonateReadyAt) setFlash(`impersonate recharging (${Math.ceil((impersonateReadyAt - Date.now()) / 1000)}s)`);
+        else room.send("ability", { id: "impersonate" });
+      }
+      break;
+    case "KeyC":
+      // Snap: the Spy photographs the Detective for +1 minute on the clock.
+      if (myRole === "spy" && !beingInterviewed && !tablet.up) {
+        if (Date.now() < snapReadyAt) setFlash(`camera busy (${Math.ceil((snapReadyAt - Date.now()) / 1000)}s)`);
+        else room.send("ability", { id: "snap" });
       }
       break;
     case "ArrowLeft":
@@ -344,12 +418,12 @@ function showRolePicker() {
       <div class="role-choice" data-role="detective">
         <div class="icon">🔎</div>
         <div class="name">DETECTIVE</div>
-        <div class="blurb">Find the spy among the guests. You carry the tablet: cameras, interviews, and the guess.</div>
+        <div class="blurb">Find the spy among the guests. Tablet for cameras, interviews and the guess; magnifier to read a face; hide to shake the spy; seal a room to lock them out.</div>
       </div>
       <div class="role-choice" data-role="spy">
         <div class="icon">🕶</div>
         <div class="name">SPY</div>
-        <div class="blurb">Hide in plain sight. Complete your tasks and answer the detective's questions without giving yourself away.</div>
+        <div class="blurb">Hide in plain sight. Steal and deliver to win; hack the lights, impersonate a guest, and snap the detective (the red pin) for more time.</div>
       </div>
     </div>`;
   roleBody.querySelectorAll(".role-choice").forEach((el) =>
@@ -394,6 +468,14 @@ function clearWorld() {
   myRole = null;
   magnify = false;
   hackReadyAt = 0;
+  hideReadyAt = 0;
+  hideActiveUntil = 0;
+  sealReadyAt = 0;
+  impersonateReadyAt = 0;
+  impersonateActiveUntil = 0;
+  snapReadyAt = 0;
+  markBody = null;
+  detectiveMarker.visible = false;
   blackoutUntil = 0;
   tasks = [];
   renderTasks();
@@ -531,13 +613,44 @@ function wire(room: Room<HouseState>) {
   );
 
   // ---- abilities
-  room.onMessage("ability_used", (m: { id: string; cooldownMs: number; durationMs?: number }) => {
-    if (m.id === "hack") {
-      hackReadyAt = Date.now() + m.cooldownMs;
-      setFlash("🔌 lights cut — move while they're blind");
+  room.onMessage(
+    "ability_used",
+    (m: { id: string; cooldownMs: number; durationMs?: number; bonusMs?: number }) => {
+      const now = Date.now();
+      const until = now + (m.durationMs ?? 0);
+      if (m.id === "hack") {
+        hackReadyAt = now + m.cooldownMs;
+        setFlash("🔌 lights cut — move while they're blind");
+      } else if (m.id === "hide") {
+        hideReadyAt = now + m.cooldownMs;
+        hideActiveUntil = until;
+        setFlash("🎭 blending in — the spy has lost track of you");
+      } else if (m.id === "inspection") {
+        sealReadyAt = now + m.cooldownMs;
+        setFlash("🔒 room sealed — the spy can't work in here");
+      } else if (m.id === "impersonate") {
+        impersonateReadyAt = now + m.cooldownMs;
+        impersonateActiveUntil = until;
+        setFlash("🚶 moving like a guest");
+      } else if (m.id === "snap") {
+        snapReadyAt = now + m.cooldownMs;
+        setFlash(`📸 snapped the detective — +${Math.round((m.bonusMs ?? 60000) / 1000)}s`);
+      }
     }
-  });
+  );
   room.onMessage("ability_denied", (m: { reason: string }) => setFlash(m.reason));
+  // Spy learns which body is the Detective (null while they're hidden).
+  room.onMessage("detective_mark", (m: { body: string | null }) => {
+    markBody = m.body;
+  });
+  // A room was sealed by an inspection (everyone sees it).
+  room.onMessage("seal", (m: { room: string; name: string; ms: number }) => {
+    if (myRole === "spy") setFlash(`🔒 ${m.name} sealed for ${Math.round(m.ms / 1000)}s`);
+  });
+  // The Detective was photographed: the Spy bought a minute.
+  room.onMessage("photographed", (m: { secondsAdded: number }) => {
+    setFlash(`📸 the spy photographed you — +${m.secondsAdded}s on the clock`);
+  });
   room.onMessage("lights", (m: { off: boolean; ms?: number }) => {
     // A spy hacked the lights: our view goes dark (we're not the spy).
     if (m.off) blackoutUntil = Date.now() + (m.ms ?? 10000);
@@ -700,6 +813,18 @@ function tick() {
     animatePerson(body.rig, body.person.action, body.speed, dt, elapsed);
   });
 
+  // ---- Spy's marker over the Detective. Bobs above their head; hidden when we
+  // don't have a mark (not the Spy, or the Detective is using `hide`).
+  const marked = markBody ? bodies.get(markBody) : null;
+  if (marked) {
+    const p = marked.rig.group.position;
+    detectiveMarker.visible = true;
+    detectiveMarker.position.set(p.x, p.y + 2.55 + Math.sin(elapsed * 2.2) * 0.08, p.z);
+    detectiveMarker.rotation.y = elapsed * 1.5;
+  } else {
+    detectiveMarker.visible = false;
+  }
+
   // ---- camera. First person while peering through the magnifying glass;
   // third person orbit otherwise.
   focusPoint.set(localPos.x, localPos.y + EYE, localPos.z);
@@ -770,11 +895,11 @@ function tick() {
       : !locked
         ? `<b>click</b> to look around`
         : myRole === "detective"
-          ? `<b>F</b> camera · <b>Q</b> tablet · <b>G</b> magnifier · <b>E</b> join in`
-          : `<b>H</b> hack · <b>E</b> join in at a spot`;
+          ? `<b>Q</b> tablet · <b>E</b> join in · abilities below`
+          : `<b>E</b> steal / give / join in · abilities below`;
     const flashLine = elapsed < flashUntil ? `<span style="color:#d8b46a">${flash}</span>` : "";
     hud.innerHTML = [
-      `<b>🔎 clues of the mind</b> — milestone 7 ${roleTag}${clock}`,
+      `<b>🔎 clues of the mind</b> ${roleTag}${clock}`,
       `<b>${here?.name ?? "…"}</b> · ${bodies.size} guests`,
       `you are <b>${self?.person.name ?? "…"}</b>, ${doing}`,
       hint,

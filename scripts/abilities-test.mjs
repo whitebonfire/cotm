@@ -1,5 +1,5 @@
-// Ability acceptance test (SOW §4.3): the Spy's hack and the Detective's
-// magnifying glass. Needs a running server.
+// Ability acceptance test (SOW §4.2, §4.3): the full kit — hack, magnifier,
+// hide, inspection (seal), impersonate, and snap. Needs a running server.
 import { Client } from "colyseus.js";
 import { roomAt } from "../dist/server/world/house.js";
 import { routeTo } from "../dist/server/world/nav.js";
@@ -15,6 +15,7 @@ const check = (name, pass, detail = "") => {
 const TYPES = [
   "you", "role_pick", "role_wait", "your_role",
   "ability_used", "ability_denied", "lights",
+  "detective_mark", "seal", "photographed",
 ];
 
 async function join(name) {
@@ -70,6 +71,11 @@ await a.waitFor("role_pick", 1500);
 a.room.send("pick_role", { role: "detective" });
 check("alice is the detective", (await a.waitFor("your_role"))?.role === "detective");
 check("bob is the spy", (await b.waitFor("your_role"))?.role === "spy");
+
+// ---- DETECTIVE MARKER: the spy is shown who the detective is (SOW §4.3).
+const mark0 = await b.waitFor("detective_mark", 1500);
+check("the spy is shown where the detective is", !!mark0 && mark0.body === a.me.body, mark0?.body);
+check("the detective is NOT shown the spy's marker", !a.inbox.some((e) => e.t === "detective_mark"));
 a.clear(); b.clear();
 
 // Park bob out of the way for the movement measurements.
@@ -95,6 +101,39 @@ b.clear();
 a.room.send("ability", { id: "hack" });
 check("the detective can't hack", !!(await a.waitFor("ability_denied", 1000)));
 a.clear();
+
+// ---- HIDE (detective blends in; the spy's marker goes dark)
+a.clear(); b.clear();
+a.room.send("ability", { id: "hide" });
+const hid = await a.waitFor("ability_used", 1500);
+check("the detective can hide", hid?.id === "hide" && hid.durationMs > 0, hid ? `${hid.durationMs}ms` : "no");
+const markGone = await b.waitFor("detective_mark", 1500);
+check("hiding drops the spy's marker on the detective", !!markGone && markGone.body === null);
+b.room.send("ability", { id: "hide" });
+check("the spy can't hide", !!(await b.waitFor("ability_denied", 1000)));
+a.clear(); b.clear();
+
+// ---- INSPECTION (seal the detective's room)
+a.room.send("ability", { id: "inspection" });
+const sealed = await a.waitFor("ability_used", 1500);
+check("the detective can seal a room", sealed?.id === "inspection" && sealed.durationMs > 0);
+const sealMsg = await b.waitFor("seal", 1500);
+check("a seal is announced with a room and duration", !!sealMsg && typeof sealMsg.room === "string" && sealMsg.ms > 0);
+b.room.send("ability", { id: "inspection" });
+check("the spy can't seal", !!(await b.waitFor("ability_denied", 1000)));
+a.clear(); b.clear();
+
+// ---- IMPERSONATE (idle spy fidgets like a guest, so it isn't frozen)
+b.room.send("ability", { id: "impersonate" });
+const imp = await b.waitFor("ability_used", 1500);
+check("the spy can impersonate", imp?.id === "impersonate" && imp.durationMs > 0, imp ? `${imp.durationMs}ms` : "no");
+const yaw0 = bobPos().yaw;
+for (let i = 0; i < 30; i++) { b.room.send("input", { f: 0, r: 0, yaw: 0 }); await sleep(40); }
+const yaw1 = bobPos().yaw;
+check("impersonate makes an idle spy shift like a guest", Math.abs(yaw1 - yaw0) > 0.01, `Δyaw ${(yaw1 - yaw0).toFixed(3)}`);
+a.room.send("ability", { id: "impersonate" });
+check("the detective can't impersonate", !!(await a.waitFor("ability_denied", 1000)));
+a.clear(); b.clear();
 
 // ---- MAGNIFYING GLASS (detective moves slower)
 const alicePos = () => b.room.state.people.get(a.me.body);
@@ -151,6 +190,32 @@ async function bobSpeed(mag) {
 }
 const spyMag = await bobSpeed(true);
 check("the spy can't use the magnifier (moves at full speed)", spyMag > 3.4, `${spyMag.toFixed(2)} m/s with mag=true`);
+
+// ---- SNAP (photograph the detective for +1 minute; must be close)
+a.clear(); b.clear();
+// bob is across the house from alice right now — a snap should be refused.
+b.room.send("ability", { id: "snap" });
+const farDenied = await b.waitFor("ability_denied", 1000);
+check("snap needs the detective close", !!farDenied && /clos/i.test(farDenied.reason ?? ""), farDenied?.reason);
+
+// the detective can't snap at all
+a.room.send("ability", { id: "snap" });
+check("the detective can't snap", !!(await a.waitFor("ability_denied", 1000)));
+a.clear(); b.clear();
+
+// walk bob onto the (stationary) detective and snap.
+const ap = alicePos();
+await navigate(b.room, bobPos, ap.x, ap.z);
+await steer(b.room, bobPos, alicePos().x, alicePos().z, false, 5000);
+const before = a.room.state.round.secondsLeft;
+b.room.send("ability", { id: "snap" });
+const snapUsed = await b.waitFor("ability_used", 1500);
+check("the spy can snap the detective when close", snapUsed?.id === "snap", snapUsed ? "" : "denied");
+await sleep(250);
+const after = a.room.state.round.secondsLeft;
+check("snap adds a minute to the clock", after - before >= 55, `${before} -> ${after}`);
+const photo = await a.waitFor("photographed", 1500);
+check("the detective is told they were photographed", !!photo && photo.secondsAdded >= 55);
 
 await a.room.leave();
 await b.room.leave();
