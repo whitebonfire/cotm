@@ -12,13 +12,17 @@
     "build:client": "vite build",
     "build:server": "tsc -p tsconfig.server.json",
     "start": "node --env-file-if-exists=.env dist/server/index.js",
+    "db:push": "node --env-file-if-exists=.env node_modules/drizzle-kit/bin.cjs push",
+    "db:generate": "node --env-file-if-exists=.env node_modules/drizzle-kit/bin.cjs generate",
+    "db:migrate": "node --env-file-if-exists=.env node_modules/drizzle-kit/bin.cjs migrate",
     "typecheck": "tsc --noEmit -p tsconfig.json",
     "test:spine": "node scripts/spine-test.mjs",
     "test:house": "npm run build:server && node scripts/house-check.mjs",
     "test:interview": "node scripts/interview-test.mjs",
     "test:abilities": "node scripts/abilities-test.mjs",
     "test:round": "node scripts/round-test.mjs",
-    "test:tasks": "node scripts/tasks-test.mjs"
+    "test:tasks": "node scripts/tasks-test.mjs",
+    "test:auth": "node scripts/auth-test.mjs"
   },
   "engines": {
     "node": ">=22"
@@ -28,16 +32,21 @@
     "@colyseus/core": "0.16.24",
     "@colyseus/schema": "3.0.76",
     "@colyseus/ws-transport": "0.16.5",
+    "better-auth": "^1.6.25",
     "colyseus": "0.16.5",
     "colyseus.js": "0.16.22",
+    "drizzle-orm": "^0.45.2",
     "express": "4.21.2",
+    "pg": "^8.22.0",
     "three": "0.185.1"
   },
   "devDependencies": {
     "@types/express": "^4.17.21",
     "@types/node": "^22.10.2",
+    "@types/pg": "^8.20.0",
     "@types/three": "^0.185.0",
     "concurrently": "^9.1.0",
+    "drizzle-kit": "^0.31.10",
     "tsx": "^4.19.2",
     "typescript": "^5.7.2",
     "vite": "^8.1.5"

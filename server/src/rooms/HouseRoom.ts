@@ -638,7 +638,7 @@ export class HouseRoom extends Room<HouseState> {
     return best;
   }
 
-  onJoin(client: Client, options?: { name?: string }) {
+  onJoin(client: Client, options?: { name?: string; host?: boolean }) {
     // Take over a guest rather than adding one. This is the Spy mechanic:
     // an existing body at the party quietly stops being driven by the AI and
     // starts being driven by a person. Nothing about the body changes — same
@@ -659,20 +659,24 @@ export class HouseRoom extends Room<HouseState> {
     // The client is told which body is theirs, and nothing about anyone else's.
     client.send("you", { body: bodyId, name: person.name });
 
-    // Roles: first player in is the host and picks; everyone after takes the
-    // leftover once the host has chosen (SOW §2.1, host-picks-first).
-    if (!this.hostSession) {
+    // Roles: the host picks; the other player takes the leftover once they've
+    // chosen (SOW §2.1, host-picks-first). When the join comes from a lobby the
+    // lobby's host is designated via options.host, so the person who clicked
+    // "start" is the one who picks — regardless of who's socket connects first.
+    // For anonymous quick-play (no flag) we fall back to first-in-is-host.
+    const lobbyHost = options?.host; // true | false | undefined
+    if (lobbyHost === true || (lobbyHost === undefined && !this.hostSession)) {
       this.hostSession = client.sessionId;
       client.send("role_pick", {});
     } else {
-      const hostRole = this.roles.get(this.hostSession);
+      const hostRole = this.hostSession ? this.roles.get(this.hostSession) : undefined;
       if (hostRole) {
         const other = hostRole === "detective" ? "spy" : "detective";
         // Give the other role only if it's still free (the 2-human game).
         if (![...this.roles.values()].includes(other)) this.grantRole(client.sessionId, other);
         else client.send("your_role", { role: "none" });
       } else {
-        client.send("role_wait", {}); // the host is still choosing
+        client.send("role_wait", {}); // the host hasn't chosen yet (or hasn't joined)
       }
     }
 

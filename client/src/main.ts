@@ -7,6 +7,8 @@ import { buildHouse, buildRoomLabels, buildFurniture } from "./house";
 import { buildPerson, animatePerson, type PersonRig } from "./person";
 import { Tablet, type RosterEntry } from "./tablet";
 import { InterviewBox } from "./interview";
+import { createAuthClient } from "better-auth/client";
+import type { LobbyState, LobbyPlayer } from "../../server/src/schema/LobbyState";
 
 const EYE = 1.25;
 const CAM_DIST = 6.0;
@@ -486,33 +488,53 @@ function clearWorld() {
   roundOverlay.classList.add("hidden");
 }
 
+// ---------------------------------------------------------------- menu & lobby
+// The overlay holds several screens (loading, quick-play, sign-in, menu, lobby)
+// and we show exactly one at a time. Which flow you see depends on whether the
+// server has a database: with one you sign in and use lobbies (SOW §6); without
+// one the game falls back to the anonymous "enter the house" quick-play.
+
+const net = new Client(endpoint);
+// Better Auth and /api are HTTP on the same origin the page is served from.
+const httpOrigin = import.meta.env.DEV ? "http://localhost:2567" : location.origin;
+const authClient = createAuthClient({ baseURL: httpOrigin });
+
+const $id = (id: string) => document.getElementById(id) as HTMLElement;
+const SCREENS = ["screen-loading", "screen-quickplay", "screen-auth", "screen-menu", "screen-lobby"];
+function showScreen(id: string) {
+  overlay.classList.remove("hidden");
+  for (const s of SCREENS) $id(s).classList.toggle("hidden", s !== id);
+}
+
+let account: { name: string; friendCode: string } | null = null;
+let lobbyRoom: Room<LobbyState> | null = null;
+
+/** Drop any old room, join a house room, wire it, and reveal the game. Used by
+ *  both quick-play (joinOrCreate) and the lobby hand-off (joinById). */
+async function connectHouse(join: (c: Client) => Promise<Room<HouseState>>) {
+  // Do NOT await leave(): a dead socket's leave() promise never resolves.
+  if (room) {
+    try {
+      room.leave(false);
+    } catch {
+      /* already gone */
+    }
+    room = null;
+  }
+  clearWorld();
+  room = await join(net);
+  wire(room);
+  overlay.classList.add("hidden");
+}
+
+// ---- quick-play (auth disabled)
 playBtn.addEventListener("click", async () => {
   playBtn.disabled = true;
   playBtn.textContent = "connecting…";
   try {
-    // Drop any previous room and wipe its bodies before joining a new one.
-    // Do NOT await leave(): after a server restart the old socket is already
-    // dead, and its leave() promise never resolves — awaiting it hangs the
-    // rejoin on "connecting…" forever. Fire it and move on.
-    if (room) {
-      try {
-        room.leave(false);
-      } catch {
-        /* already gone */
-      }
-      room = null;
-    }
-    clearWorld();
-
-    const client = new Client(endpoint);
-    room = await client.joinOrCreate<HouseState>("house", {
-      name: localStorage.getItem("cotm:name") ?? "",
-    });
-    wire(room);
-    // Don't drop into the house yet — the role overlay takes over until the
-    // server assigns a role (host picks; the other player waits then takes the
-    // leftover). enterGameWithRole() grabs pointer lock once that's settled.
-    overlay.classList.add("hidden");
+    await connectHouse((c) =>
+      c.joinOrCreate<HouseState>("house", { name: localStorage.getItem("cotm:name") ?? "" })
+    );
   } catch (err) {
     console.error(err);
     playBtn.disabled = false;
@@ -520,6 +542,202 @@ playBtn.addEventListener("click", async () => {
     hud.innerHTML = `<b>connection failed</b><br />${String(err)}`;
   }
 });
+
+// ---- sign in / sign up
+let authMode: "in" | "up" = "in";
+function setAuthMode(m: "in" | "up") {
+  authMode = m;
+  ($id("auth-name") as HTMLInputElement).classList.toggle("hidden", m === "in");
+  $id("auth-sub").textContent = m === "in" ? "sign in to play" : "create your account";
+  $id("auth-submit").textContent = m === "in" ? "sign in" : "create account";
+  $id("auth-toggle-text").textContent = m === "in" ? "New here?" : "Already have an account?";
+  $id("auth-toggle").textContent = m === "in" ? "create an account" : "sign in";
+  ($id("auth-password") as HTMLInputElement).autocomplete =
+    m === "in" ? "current-password" : "new-password";
+  $id("auth-error").textContent = "";
+}
+$id("auth-toggle").addEventListener("click", (e) => {
+  e.preventDefault();
+  setAuthMode(authMode === "in" ? "up" : "in");
+});
+$id("auth-form").addEventListener("submit", async (e) => {
+  e.preventDefault();
+  const name = ($id("auth-name") as HTMLInputElement).value.trim();
+  const email = ($id("auth-email") as HTMLInputElement).value.trim();
+  const password = ($id("auth-password") as HTMLInputElement).value;
+  const err = $id("auth-error");
+  const submit = $id("auth-submit") as HTMLButtonElement;
+  err.textContent = "";
+  submit.disabled = true;
+  try {
+    const res =
+      authMode === "up"
+        ? await authClient.signUp.email({ email, password, name: name || email.split("@")[0] })
+        : await authClient.signIn.email({ email, password });
+    if (res.error) {
+      err.textContent = res.error.message || "That didn't work — check your details.";
+    } else {
+      const { data } = await authClient.getSession();
+      if (data?.user) onSignedIn(data.user);
+    }
+  } catch (ex) {
+    err.textContent = String(ex);
+  } finally {
+    submit.disabled = false;
+  }
+});
+
+function onSignedIn(user: { name: string; friendCode?: string | null }) {
+  account = { name: user.name, friendCode: user.friendCode ?? "" };
+  $id("menu-name").textContent = user.name;
+  $id("menu-friendcode").textContent = user.friendCode ?? "—";
+  showScreen("screen-menu");
+}
+
+// ---- main menu: create or join a lobby
+$id("menu-copy-code").addEventListener("click", (e) => {
+  e.preventDefault();
+  if (account?.friendCode) navigator.clipboard?.writeText(account.friendCode);
+});
+$id("menu-signout").addEventListener("click", async (e) => {
+  e.preventDefault();
+  await authClient.signOut();
+  account = null;
+  setAuthMode("in");
+  showScreen("screen-auth");
+});
+const menuError = (m: string) => ($id("menu-error").textContent = m);
+$id("menu-create").addEventListener("click", async () => {
+  menuError("");
+  ($id("menu-create") as HTMLButtonElement).disabled = true;
+  try {
+    wireLobby(await net.create<LobbyState>("lobby"));
+  } catch (err) {
+    menuError("Couldn't create a lobby. " + String(err));
+  } finally {
+    ($id("menu-create") as HTMLButtonElement).disabled = false;
+  }
+});
+$id("join-form").addEventListener("submit", async (e) => {
+  e.preventDefault();
+  const code = ($id("join-code") as HTMLInputElement).value.trim();
+  if (!code) return;
+  menuError("");
+  try {
+    wireLobby(await net.joinById<LobbyState>(code));
+  } catch {
+    menuError("Couldn't find a lobby with that code.");
+  }
+});
+
+// ---- the lobby
+const TOY_NAME = ["", "🔎 detective", "🕶 spy"];
+function renderLobby(lobby: Room<LobbyState>) {
+  const me = lobby.sessionId;
+  const entries = [...lobby.state.players.entries()];
+  const cont = $id("lobby-players");
+  cont.innerHTML = "";
+  let iAmHost = false;
+  let myToy = 0;
+  for (const [sid, p] of entries) {
+    if (sid === me) {
+      iAmHost = p.host;
+      myToy = p.toy;
+    }
+    const div = document.createElement("div");
+    div.className = "p" + (p.host ? " host" : "");
+    const tag = p.host ? "HOST" : TOY_NAME[p.toy] || "here";
+    div.innerHTML = `<span>${p.name}${sid === me ? " (you)" : ""}</span><span class="tag">${tag}</span>`;
+    cont.appendChild(div);
+  }
+  const start = $id("lobby-start") as HTMLButtonElement;
+  const ready = iAmHost && entries.length >= 2;
+  start.disabled = !ready;
+  start.textContent = !iAmHost
+    ? "waiting for the host…"
+    : entries.length < 2
+      ? "waiting for a friend…"
+      : "start round";
+  document.querySelectorAll("#screen-lobby .toy").forEach((b) => {
+    const id = b.getAttribute("data-toy") === "detective" ? 1 : 2;
+    b.classList.toggle("on", id === myToy);
+  });
+}
+
+function wireLobby(lobby: Room<LobbyState>) {
+  lobbyRoom = lobby;
+  $id("lobby-code").textContent = lobby.roomId;
+  showScreen("screen-lobby");
+  $id("lobby-error").textContent = "";
+
+  const $$ = getStateCallbacks(lobby);
+  const render = () => renderLobby(lobby);
+  $$(lobby.state).players.onAdd((p: LobbyPlayer) => {
+    $$(p).onChange(render);
+    render();
+  });
+  $$(lobby.state).players.onRemove(render);
+
+  lobby.onMessage("start_game", async (m: { roomId: string; host?: boolean }) => {
+    lobbyRoom = null;
+    try {
+      await connectHouse((c) =>
+        c.joinById<HouseState>(m.roomId, { name: account?.name ?? "", host: !!m.host })
+      );
+    } catch (err) {
+      showScreen("screen-menu");
+      menuError("Couldn't join the round. " + String(err));
+    }
+  });
+  lobby.onMessage("lobby_error", (m: { reason: string }) => ($id("lobby-error").textContent = m.reason));
+  lobby.onError((_c, msg) => ($id("lobby-error").textContent = msg ?? "lobby error"));
+}
+
+document.querySelectorAll("#screen-lobby .toy").forEach((b) =>
+  b.addEventListener("click", () => {
+    const toy = b.getAttribute("data-toy");
+    // Clicking your current toy turns it off.
+    const on = b.classList.contains("on");
+    lobbyRoom?.send("set_toy", { toy: on ? "none" : toy });
+  })
+);
+$id("lobby-start").addEventListener("click", () => lobbyRoom?.send("start"));
+$id("lobby-copy").addEventListener("click", (e) => {
+  e.preventDefault();
+  if (lobbyRoom) navigator.clipboard?.writeText(lobbyRoom.roomId);
+});
+$id("lobby-leave").addEventListener("click", (e) => {
+  e.preventDefault();
+  lobbyRoom?.leave();
+  lobbyRoom = null;
+  showScreen("screen-menu");
+});
+
+// ---- decide which flow to show on load
+async function initMenu() {
+  let cfg: { auth: boolean } = { auth: false };
+  try {
+    cfg = await fetch(`${httpOrigin}/api/config`).then((r) => r.json());
+  } catch {
+    /* server unreachable — fall through to quick-play, which will surface it */
+  }
+  if (!cfg.auth) {
+    showScreen("screen-quickplay");
+    return;
+  }
+  try {
+    const { data } = await authClient.getSession();
+    if (data?.user) {
+      onSignedIn(data.user);
+      return;
+    }
+  } catch {
+    /* not signed in */
+  }
+  setAuthMode("in");
+  showScreen("screen-auth");
+}
+initMenu();
 
 function addBody(person: Person, id: string) {
   const rig = buildPerson({
