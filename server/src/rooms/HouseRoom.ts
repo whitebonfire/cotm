@@ -25,7 +25,7 @@ import { liveReply, type ChatTurn } from "../ai/llm.js";
  * human's typing time alike. (Explicit env parse so 0 is honoured, for tests.)
  */
 const REVEAL_DELAY_MS =
-  process.env.COTM_REVEAL_MS !== undefined ? Number(process.env.COTM_REVEAL_MS) : 20000;
+  process.env.COTM_REVEAL_MS !== undefined ? Number(process.env.COTM_REVEAL_MS) : 50000;
 
 /** Auto-close an interview the Detective has gone quiet on, so a human target
  *  isn't pinned in the chat (and on autopilot) forever. */
