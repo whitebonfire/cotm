@@ -11,6 +11,11 @@ import { InterviewBox } from "./interview";
 const EYE = 1.25;
 const CAM_DIST = 6.0;
 const CAM_MIN = 1.1;
+/** Must match MAGNIFY_SPEED on the server, or prediction fights it. */
+const MAGNIFY_SPEED = 2.1;
+const BASE_FOV = 58;
+/** Zoomed field of view while looking through the magnifying glass. */
+const MAG_FOV = 28;
 
 const ACTION_NAME: Record<number, string> = {
   [Action.IDLE]: "standing about",
@@ -63,6 +68,36 @@ const interviewBox = new InterviewBox();
 /** True while THIS player is being questioned — their body autopilots and their
  *  input is ignored, so the typing box has their full attention (SOW §5). */
 let beingInterviewed = false;
+
+// ---- abilities
+/** Detective peering through the magnifying glass: first person, slower walk. */
+let magnify = false;
+/** Spy `hack` cooldown ends at this time (0 = ready). */
+let hackReadyAt = 0;
+/** The lights are cut for us (a Spy hacked): black out until this time. */
+let blackoutUntil = 0;
+const blackout = document.getElementById("blackout") as HTMLDivElement;
+const magVignette = document.getElementById("magvignette") as HTMLDivElement;
+const abilityBar = document.getElementById("abilities") as HTMLDivElement;
+
+let lastAbilityHtml = "";
+/** Render the ability bar for the current role (only touches the DOM on change). */
+function updateAbilityBar() {
+  let html = "";
+  if (myRole === "detective") {
+    html = `<div class="ab ${magnify ? "active" : ""}"><kbd>G</kbd> magnifier</div>`;
+  } else if (myRole === "spy") {
+    const left = Math.ceil((hackReadyAt - Date.now()) / 1000);
+    const cooling = left > 0;
+    html = `<div class="ab ${cooling ? "cooling" : ""}"><kbd>H</kbd> hack ${
+      cooling ? `<span class="cd">${left}s</span>` : "ready"
+    }</div>`;
+  }
+  if (html !== lastAbilityHtml) {
+    abilityBar.innerHTML = html;
+    lastAbilityHtml = html;
+  }
+}
 
 /** Transient HUD line, e.g. "camera placed". Cleared after a couple seconds. */
 let flash = "";
@@ -138,6 +173,20 @@ window.addEventListener("keydown", (e) => {
         // Drop the camera where you stand, looking the way you face.
         tablet.place(localPos.x, localPos.z, -Math.sin(camYaw), -Math.cos(camYaw));
         setFlash("📷 camera placed — raise the tablet (Q) to watch");
+      }
+      break;
+    case "KeyG":
+      // Magnifying glass: first person + slower, the Detective's signature tool.
+      if (myRole === "detective" && !tablet.up && !beingInterviewed) {
+        magnify = !magnify;
+        setFlash(magnify ? "🔍 magnifying glass raised" : "magnifying glass lowered");
+      }
+      break;
+    case "KeyH":
+      // Hack: the Spy cuts the lights for everyone but themselves.
+      if (myRole === "spy" && !beingInterviewed) {
+        if (Date.now() < hackReadyAt) setFlash(`hack recharging (${Math.ceil((hackReadyAt - Date.now()) / 1000)}s)`);
+        else room.send("ability", { id: "hack" });
       }
       break;
     case "ArrowLeft":
@@ -283,6 +332,9 @@ function clearWorld() {
   bodies.clear();
   myBody = null;
   myRole = null;
+  magnify = false;
+  hackReadyAt = 0;
+  blackoutUntil = 0;
   selfRing.visible = false;
   tablet.close();
   roleOverlay.classList.add("hidden");
@@ -397,6 +449,20 @@ function wire(room: Room<HouseState>) {
     tablet.interviewClosedByServer();
   });
 
+  // ---- abilities
+  room.onMessage("ability_used", (m: { id: string; cooldownMs: number; durationMs?: number }) => {
+    if (m.id === "hack") {
+      hackReadyAt = Date.now() + m.cooldownMs;
+      setFlash("🔌 lights cut — move while they're blind");
+    }
+  });
+  room.onMessage("ability_denied", (m: { reason: string }) => setFlash(m.reason));
+  room.onMessage("lights", (m: { off: boolean; ms?: number }) => {
+    // A spy hacked the lights: our view goes dark (we're not the spy).
+    if (m.off) blackoutUntil = Date.now() + (m.ms ?? 10000);
+    else blackoutUntil = 0;
+  });
+
   $(room.state).people.onAdd((person: Person, id: string) => {
     addBody(person, id);
     if (id === myBody) {
@@ -434,10 +500,10 @@ let elapsed = 0;
 
 function currentInput() {
   // Hands are on the tablet, or on the typing box — you don't walk either way.
-  if (tablet.up || beingInterviewed) return { f: 0, r: 0, yaw: camYaw };
+  if (tablet.up || beingInterviewed) return { f: 0, r: 0, yaw: camYaw, mag: magnify };
   const f = (keys.has("KeyW") ? 1 : 0) - (keys.has("KeyS") ? 1 : 0);
   const r = (keys.has("KeyD") ? 1 : 0) - (keys.has("KeyA") ? 1 : 0);
-  return { f, r, yaw: camYaw };
+  return { f, r, yaw: camYaw, mag: magnify };
 }
 
 function tick() {
@@ -478,8 +544,9 @@ function tick() {
     const len = Math.hypot(dx, dz);
 
     if (len > 0.001) {
-      dx = (dx / len) * SPEED * dt;
-      dz = (dz / len) * SPEED * dt;
+      const spd = magnify ? MAGNIFY_SPEED : SPEED;
+      dx = (dx / len) * spd * dt;
+      dz = (dz / len) * spd * dt;
 
       const solved = resolveCollisions(localPos.x + dx, localPos.z + dz);
       localPos.x = solved.x;
@@ -546,21 +613,42 @@ function tick() {
     animatePerson(body.rig, body.person.action, body.speed, dt, elapsed);
   });
 
-  // ---- third-person camera
+  // ---- camera. First person while peering through the magnifying glass;
+  // third person orbit otherwise.
   focusPoint.set(localPos.x, localPos.y + EYE, localPos.z);
-
   const cosP = Math.cos(camPitch);
   camDir.set(Math.sin(camYaw) * cosP, Math.sin(camPitch), Math.cos(camYaw) * cosP).normalize();
 
-  let dist = CAM_DIST;
-  raycaster.set(focusPoint, camDir);
-  raycaster.far = CAM_DIST;
-  const hits = raycaster.intersectObjects(colliders, false);
-  if (hits.length > 0) dist = Math.max(CAM_MIN, hits[0].distance - 0.32);
+  if (magnify && self) {
+    // Look out of the guest's own eyes, down the aim direction (-camDir), and
+    // zoom in — the point of a magnifier is to read a face from across the room.
+    self.rig.group.visible = false; // don't clip our own head
+    camera.position.set(localPos.x, localPos.y + 1.5, localPos.z);
+    camera.lookAt(camera.position.x - camDir.x, camera.position.y - camDir.y, camera.position.z - camDir.z);
+    if (camera.fov !== MAG_FOV) {
+      camera.fov = MAG_FOV;
+      camera.updateProjectionMatrix();
+    }
+  } else {
+    if (self) self.rig.group.visible = true;
+    if (camera.fov !== BASE_FOV) {
+      camera.fov = BASE_FOV;
+      camera.updateProjectionMatrix();
+    }
+    let dist = CAM_DIST;
+    raycaster.set(focusPoint, camDir);
+    raycaster.far = CAM_DIST;
+    const hits = raycaster.intersectObjects(colliders, false);
+    if (hits.length > 0) dist = Math.max(CAM_MIN, hits[0].distance - 0.32);
+    camera.position.copy(focusPoint).addScaledVector(camDir, dist);
+    camera.position.y = Math.max(0.35, camera.position.y);
+    camera.lookAt(focusPoint);
+  }
 
-  camera.position.copy(focusPoint).addScaledVector(camDir, dist);
-  camera.position.y = Math.max(0.35, camera.position.y);
-  camera.lookAt(focusPoint);
+  // Magnifying-lens vignette, and the hack blackout.
+  magVignette.style.opacity = magnify ? "1" : "0";
+  blackout.style.opacity = Date.now() < blackoutUntil ? "1" : "0";
+  updateAbilityBar();
 
   if (room) {
     const here = roomAt(localPos.x, localPos.z);
@@ -572,8 +660,8 @@ function tick() {
       : !locked
         ? `<b>click</b> to look around`
         : myRole === "detective"
-          ? `<b>F</b> camera · <b>Q</b> tablet · <b>E</b> join in`
-          : `<b>E</b> join in at a spot`;
+          ? `<b>F</b> camera · <b>Q</b> tablet · <b>G</b> magnifier · <b>E</b> join in`
+          : `<b>H</b> hack · <b>E</b> join in at a spot`;
     const flashLine = elapsed < flashUntil ? `<span style="color:#d8b46a">${flash}</span>` : "";
     hud.innerHTML = [
       `<b>🔎 clues of the mind</b> — milestone 6 ${roleTag}`,

@@ -53,6 +53,8 @@ interface InputMessage {
   r: number;
   /** Camera yaw in radians, which is what movement is relative to. */
   yaw: number;
+  /** Detective looking through the magnifying glass — first person, slower. */
+  mag?: boolean;
 }
 
 interface StoredInput extends InputMessage {
@@ -60,6 +62,14 @@ interface StoredInput extends InputMessage {
 }
 
 const TICK_MS = 1000 / 20;
+
+/** Walking speed while the Detective is peering through the magnifying glass —
+ *  the cost of looking closely is that you can't move quickly (SOW §4.2). */
+const MAGNIFY_SPEED = 2.1;
+
+/** The Spy's `hack`: cut the lights for everyone but the Spy (SOW §4.3). */
+const HACK_DURATION_MS = 10000;
+const HACK_COOLDOWN_MS = 60000;
 
 /** Bodies at the party. The Spy will be one of these, not a thirteenth guest. */
 export const PARTY_SIZE = 12;
@@ -120,6 +130,9 @@ export class HouseRoom extends Room<HouseState> {
   /** Bodies currently on autopilot because their human is being questioned. */
   private autopilot = new Set<string>(); // bodyId
 
+  // ---- abilities: per-player cooldowns, keyed by ability id -> ready-at time.
+  private cooldowns = new Map<string, Map<string, number>>();
+
   onCreate() {
     this.setState(new HouseState());
     this.setPatchRate(50);
@@ -132,8 +145,16 @@ export class HouseRoom extends Room<HouseState> {
         f: clamp(num(msg?.f), -1, 1),
         r: clamp(num(msg?.r), -1, 1),
         yaw: num(msg?.yaw),
+        // Magnifying glass is Detective-only; ignore the flag from anyone else.
+        mag: !!msg?.mag && this.roles.get(client.sessionId) === "detective",
         at: Date.now(),
       });
+    });
+
+    // Triggered abilities with cooldowns (SOW §4.3). Magnify is a held state
+    // (in `input`), not one of these.
+    this.onMessage("ability", (client: Client, msg: { id?: string }) => {
+      this.useAbility(client, typeof msg?.id === "string" ? msg.id : "");
     });
 
     // Join in with whatever happens at the nearest anchor — read the book,
@@ -356,6 +377,48 @@ export class HouseRoom extends Room<HouseState> {
     if (person && person.action === Action.WALK) person.action = Action.IDLE;
   }
 
+  // ---------------------------------------------------------------- abilities
+
+  private cooldownReady(session: string, id: string): number {
+    return this.cooldowns.get(session)?.get(id) ?? 0;
+  }
+
+  private setCooldown(session: string, id: string, ms: number) {
+    let m = this.cooldowns.get(session);
+    if (!m) this.cooldowns.set(session, (m = new Map()));
+    m.set(id, Date.now() + ms);
+  }
+
+  private useAbility(client: Client, id: string) {
+    const session = client.sessionId;
+    const role = this.roles.get(session);
+    const now = Date.now();
+
+    if (id === "hack") {
+      if (role !== "spy") {
+        client.send("ability_denied", { id, reason: "Only the spy can do that." });
+        return;
+      }
+      const left = this.cooldownReady(session, id) - now;
+      if (left > 0) {
+        client.send("ability_denied", { id, reason: `hack recharging (${Math.ceil(left / 1000)}s)` });
+        return;
+      }
+      this.setCooldown(session, id, HACK_COOLDOWN_MS);
+      // Cut the lights for everyone BUT the hacker — only the Spy can see
+      // (SOW §4.3). NPCs have no client, so in practice this darkens the
+      // Detective's screen while the Spy moves freely.
+      for (const c of this.clients) {
+        if (c.sessionId === session) continue;
+        c.send("lights", { off: true, ms: HACK_DURATION_MS });
+      }
+      client.send("ability_used", { id, cooldownMs: HACK_COOLDOWN_MS, durationMs: HACK_DURATION_MS });
+      return;
+    }
+
+    client.send("ability_denied", { id, reason: "Unknown ability." });
+  }
+
   /** Fill the house with guests, each with a persona and a writing voice. */
   private populate() {
     const spots = [...ANCHORS].sort(() => Math.random() - 0.5);
@@ -545,9 +608,11 @@ export class HouseRoom extends Room<HouseState> {
       // Moving cancels any performance.
       this.held.delete(sessionId);
 
-      // Normalise so diagonals aren't faster than the axes.
-      dx = (dx / len) * SPEED * dt;
-      dz = (dz / len) * SPEED * dt;
+      // Normalise so diagonals aren't faster than the axes. The Detective moves
+      // slower while peering through the magnifying glass.
+      const speed = input.mag ? MAGNIFY_SPEED : SPEED;
+      dx = (dx / len) * speed * dt;
+      dz = (dz / len) * speed * dt;
 
       // Walls are enforced here, not on the client.
       const solved = resolveCollisions(person.x + dx, person.z + dz);

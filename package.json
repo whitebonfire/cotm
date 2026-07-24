@@ -15,7 +15,8 @@
     "typecheck": "tsc --noEmit -p tsconfig.json",
     "test:spine": "node scripts/spine-test.mjs",
     "test:house": "npm run build:server && node scripts/house-check.mjs",
-    "test:interview": "node scripts/interview-test.mjs"
+    "test:interview": "node scripts/interview-test.mjs",
+    "test:abilities": "node scripts/abilities-test.mjs"
   },
   "engines": {
     "node": ">=22"

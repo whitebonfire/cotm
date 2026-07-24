@@ -26,6 +26,43 @@
       }
       #hud b { color: #d8b46a; font-weight: 600; }
 
+      /* magnifying-glass lens: a soft vignette framing a clear central circle */
+      #magvignette {
+        position: fixed; inset: 0; pointer-events: none; z-index: 8; opacity: 0;
+        transition: opacity 0.18s;
+        background: radial-gradient(circle at 50% 48%,
+          rgba(0,0,0,0) 34%, rgba(0,0,0,0.25) 56%, rgba(0,0,0,0.72) 82%);
+      }
+      /* a faint ring, like the rim of the glass */
+      #magvignette::after {
+        content: ""; position: absolute; left: 50%; top: 48%; transform: translate(-50%,-50%);
+        width: 62vmin; height: 62vmin; border-radius: 50%;
+        border: 2px solid rgba(216,180,106,0.18);
+        box-shadow: 0 0 40px rgba(216,180,106,0.08);
+      }
+      /* hack blackout: near-total darkness for whoever isn't the spy */
+      #blackout {
+        position: fixed; inset: 0; pointer-events: none; z-index: 9; opacity: 0;
+        transition: opacity 0.35s; background: #000;
+      }
+      /* ability bar */
+      #abilities {
+        position: fixed; bottom: 16px; left: 50%; transform: translateX(-50%);
+        display: flex; gap: 10px; z-index: 7; pointer-events: none;
+        font-size: 12px; letter-spacing: 0.04em;
+      }
+      #abilities .ab {
+        display: flex; align-items: center; gap: 7px; padding: 7px 12px;
+        background: rgba(13,16,22,0.82); border: 1px solid #2b3140; border-radius: 6px;
+        color: #cdd0d8;
+      }
+      #abilities .ab.active { border-color: #d8b46a; color: #d8b46a; }
+      #abilities .ab.cooling { opacity: 0.55; }
+      #abilities .ab kbd {
+        border: 1px solid #444; border-radius: 3px; padding: 1px 6px; font-size: 11px; background: #191c22;
+      }
+      #abilities .ab .cd { color: #e0a05a; }
+
       #overlay {
         position: fixed;
         inset: 0;
@@ -299,14 +336,22 @@
   <body>
     <div id="hud"></div>
 
+    <!-- magnifying-glass lens vignette (detective, first person) -->
+    <div id="magvignette"></div>
+    <!-- hack blackout: the lights are cut for everyone but the spy -->
+    <div id="blackout"></div>
+    <!-- ability bar -->
+    <div id="abilities"></div>
+
     <div id="overlay">
       <div class="card">
         <h1>🔎 CLUES OF THE MIND 🕶</h1>
-        <div class="sub">milestone 6 &middot; roles</div>
+        <div class="sub">milestone 6 &middot; roles &amp; abilities</div>
         <button id="play" disabled>connecting&hellip;</button>
         <p>
           <kbd>W</kbd><kbd>A</kbd><kbd>S</kbd><kbd>D</kbd> move &middot; mouse look &middot; <kbd>E</kbd> join in<br />
-          detective tools: <kbd>F</kbd> camera &middot; <kbd>Q</kbd> tablet<br />
+          detective: <kbd>F</kbd> camera &middot; <kbd>Q</kbd> tablet &middot; <kbd>G</kbd> magnifier<br />
+          spy: <kbd>H</kbd> hack the lights<br />
           <span style="opacity:.6">host picks a role, friend takes the other</span>
         </p>
       </div>

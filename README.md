@@ -4,7 +4,7 @@ A browser-based 3D detective game. One Detective, one Spy, twelve AI partygoers,
 
 See [SOW.md](./SOW.md) for the design. This README is about running the thing.
 
-**Current state: milestone 6 — roles + the live interview.** You pick a role (host first, friend takes the other): the Detective carries the tablet, the Spy has none. The interview is a **live chat** — the Detective types questions and the guest answers turn by turn. NPCs answer live via Claude, in a distinct writing voice; a human being questioned types their own replies. Answer timing is paced so speed can't out the AI. No win conditions yet (that's M7).
+**Current state: milestone 6 — roles, the live interview, and abilities.** You pick a role (host first, friend takes the other): the Detective carries the tablet, the Spy has none. The interview is a **live chat** — the Detective types questions and the guest answers turn by turn (NPCs live via Claude, a human types their own), with a fixed reveal window so answer timing can't out the AI. **Abilities:** the Detective's magnifying glass (`G` — first person, zoomed, slower) and the Spy's hack (`H` — cuts the lights for everyone but the spy, 60s cooldown). More of the kit (hide, inspection, impersonate, snap) still to come, and no win conditions yet (M7).
 
 ```
         -20        -6    0    6              20
