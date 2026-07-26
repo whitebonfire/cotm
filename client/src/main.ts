@@ -192,9 +192,53 @@ interface Body {
   /** Smoothed metres/sec, for the walk cycle. */
   speed: number;
   prev: THREE.Vector3;
+  /** Floating name label; hidden on your own body. */
+  label: THREE.Sprite;
 }
 
 const bodies = new Map<string, Body>();
+
+/**
+ * A floating name label above a guest's head. Drawn to a canvas and shown on a
+ * camera-facing sprite. Names are already known to every client (they're on the
+ * schema), and the Spy wears the name of the guest they took over, so a label
+ * gives nothing away — it's just a readability aid.
+ */
+function makeNameLabel(name: string): THREE.Sprite {
+  const dpr = 2; // render at 2x for crisp text
+  const font = `600 ${22 * dpr}px ui-monospace, "SF Mono", Menlo, monospace`;
+  const canvas = document.createElement("canvas");
+  const ctx = canvas.getContext("2d")!;
+  ctx.font = font;
+  const padX = 14 * dpr;
+  const w = Math.ceil(ctx.measureText(name).width) + padX * 2;
+  const h = 34 * dpr;
+  canvas.width = w;
+  canvas.height = h;
+  // measureText resets after the resize above, so restore the font.
+  ctx.font = font;
+  ctx.textAlign = "center";
+  ctx.textBaseline = "middle";
+  // A soft dark pill behind the text so it reads over any background.
+  ctx.fillStyle = "rgba(10, 12, 16, 0.55)";
+  ctx.beginPath();
+  ctx.roundRect(0, 0, w, h, 9 * dpr);
+  ctx.fill();
+  ctx.fillStyle = "#eae7df";
+  ctx.fillText(name, w / 2, h / 2 + dpr);
+
+  const tex = new THREE.CanvasTexture(canvas);
+  tex.minFilter = THREE.LinearFilter;
+  tex.colorSpace = THREE.SRGBColorSpace;
+  const spr = new THREE.Sprite(
+    new THREE.SpriteMaterial({ map: tex, transparent: true, depthTest: false, depthWrite: false })
+  );
+  const s = 0.0038; // world units per canvas pixel
+  spr.scale.set(w * s, h * s, 1);
+  spr.position.set(0, 2.05, 0); // above the head; the detective pin sits higher
+  spr.renderOrder = 900;
+  return spr;
+}
 
 /**
  * The Spy-only marker floating over the Detective (SOW §4.3). A small red
@@ -753,6 +797,12 @@ function addBody(person: Person, id: string) {
   });
   rig.group.position.set(person.x, person.y, person.z);
   rig.group.rotation.y = person.yaw;
+  // A name floats over every guest's head. Child of the (unscaled) group so it
+  // follows the body; sprites always face the camera, so the group's yaw and
+  // the label are independent. Removed automatically with the body. Visibility
+  // is toggled each frame so your own name doesn't hover over you.
+  const label = makeNameLabel(person.name);
+  rig.group.add(label);
   scene.add(rig.group);
 
   bodies.set(id, {
@@ -761,6 +811,7 @@ function addBody(person: Person, id: string) {
     target: new THREE.Vector3(person.x, person.y, person.z),
     speed: 0,
     prev: new THREE.Vector3(person.x, person.y, person.z),
+    label,
   });
 }
 
@@ -1011,6 +1062,8 @@ function tick() {
 
   // ---- everyone else eases toward the last state we were sent
   bodies.forEach((body, id) => {
+    // Don't hover your own name over yourself.
+    body.label.visible = id !== myBody;
     if (id !== myBody) {
       body.target.set(body.person.x, body.person.y, body.person.z);
       body.rig.group.position.lerp(body.target, 1 - Math.pow(0.0015, dt));
