@@ -162,6 +162,26 @@ function makeHairGeometry(): THREE.BufferGeometry {
   return g;
 }
 
+/**
+ * A shaped t-shirt torso, not a slab: a faceted body that's broad at the
+ * shoulders and tapers to the waist, flattened front-to-back with a slight
+ * chest. Centred on its own origin (y -0.3..+0.3); the caller positions it.
+ */
+function makeTorsoGeometry(): THREE.BufferGeometry {
+  const g = new THREE.CylinderGeometry(0.21, 0.15, 0.6, 8, 4);
+  const p = g.attributes.position;
+  const v = new THREE.Vector3();
+  for (let i = 0; i < p.count; i++) {
+    v.fromBufferAttribute(p, i);
+    v.z *= 0.64; // flatten front-to-back
+    if (v.z > 0 && v.y > -0.05) v.z *= 1.18; // a little chest up front
+    if (v.y > 0.24) v.x *= 1.05; // square the shoulders off a touch
+    p.setXYZ(i, v.x, v.y, v.z);
+  }
+  g.computeVertexNormals();
+  return g;
+}
+
 export function buildPerson(look: Look): PersonRig {
   const group = new THREE.Group();
 
@@ -193,30 +213,38 @@ export function buildPerson(look: Look): PersonRig {
   legR.position.x = 0.1;
   inner.add(legL, legR);
 
-  // ---- torso: a plain t-shirt (low-poly), slimmer than before
+  // ---- torso: a shaped low-poly t-shirt (shoulders -> waist), with a V-neck
   const torso = new THREE.Group();
   torso.position.y = 0.82;
-  const chest = new THREE.Mesh(new THREE.BoxGeometry(0.4, 0.6, 0.22), shirtMat);
-  chest.position.y = 0.3;
+  const chest = new THREE.Mesh(makeTorsoGeometry(), shirtMat);
+  chest.position.y = 0.3; // spans hip (0) to shoulders (0.6)
   chest.castShadow = true;
   torso.add(chest);
 
-  // neck (skin, showing at the collar)
-  const neck = new THREE.Mesh(new THREE.CylinderGeometry(0.055, 0.07, 0.12, 6), skinMat);
-  neck.position.y = 0.58;
+  // neck (skin, showing above the collar)
+  const neck = new THREE.Mesh(new THREE.CylinderGeometry(0.055, 0.07, 0.14, 6), skinMat);
+  neck.position.y = 0.585;
   neck.castShadow = true;
   torso.add(neck);
 
+  // V-neck: a small wedge of skin at the throat (apex pointing down)
+  const vneck = new THREE.Mesh(new THREE.ConeGeometry(0.05, 0.11, 3), skinMat);
+  vneck.rotation.x = Math.PI;
+  vneck.scale.z = 0.4;
+  vneck.position.set(0, 0.52, 0.14);
+  torso.add(vneck);
+
   inner.add(torso);
 
-  // ---- arms: bare skin, with short shirt sleeves and hands
+  // ---- arms: bare skin, with flared short sleeves and hands
   const armL = limb(skin, 0.1, 0.62, 0.11, 0.56, { color: skin, kind: "hand" });
   const armR = limb(skin, 0.1, 0.62, 0.11, 0.56, { color: skin, kind: "hand" });
-  armL.position.x = -0.24;
-  armR.position.x = 0.24;
+  armL.position.x = -0.23;
+  armR.position.x = 0.23;
   for (const arm of [armL, armR]) {
-    const sleeve = new THREE.Mesh(new THREE.CylinderGeometry(0.082, 0.072, 0.2, 6), shirtMat);
-    sleeve.position.y = -0.1;
+    // a short cap sleeve, wider at the opening so it flares off the shoulder
+    const sleeve = new THREE.Mesh(new THREE.CylinderGeometry(0.075, 0.1, 0.22, 6), shirtMat);
+    sleeve.position.y = -0.09;
     sleeve.castShadow = true;
     arm.add(sleeve);
   }
