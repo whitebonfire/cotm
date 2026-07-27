@@ -1085,8 +1085,11 @@ function tick() {
 
   // ---- everyone else eases toward the last state we were sent
   bodies.forEach((body, id) => {
-    // Don't hover your own name over yourself.
-    body.label.visible = id !== myBody;
+    // No name over your own body, and — on the Spy's screen — none over the
+    // Detective either (only NPCs and the Spy carry names). `markBody` is the
+    // Detective, known only to the Spy; it goes null while the Detective is
+    // hiding, so their name reappears then and they blend in like a guest.
+    body.label.visible = id !== myBody && id !== markBody;
     if (id !== myBody) {
       body.target.set(body.person.x, body.person.y, body.person.z);
       body.rig.group.position.lerp(body.target, 1 - Math.pow(0.0015, dt));
