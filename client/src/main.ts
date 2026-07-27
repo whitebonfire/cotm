@@ -757,6 +757,25 @@ $id("lobby-leave").addEventListener("click", (e) => {
   showScreen("screen-menu");
 });
 
+// ---- (test) play solo: a fresh private room where the round starts with just
+// you and the NPCs — no second player, no sign-in required.
+async function enterSolo() {
+  try {
+    await connectHouse((c) =>
+      c.create<HouseState>("house", { solo: true, host: true, name: account?.name ?? "Tester" })
+    );
+  } catch (err) {
+    console.error(err);
+    hud.innerHTML = `<b>couldn't start a solo game</b><br />${String(err)}`;
+  }
+}
+document.querySelectorAll(".test-solo").forEach((el) =>
+  el.addEventListener("click", (e) => {
+    e.preventDefault();
+    enterSolo();
+  })
+);
+
 // ---- decide which flow to show on load
 async function initMenu() {
   let cfg: { auth: boolean } = { auth: false };

@@ -160,6 +160,9 @@ export class HouseRoom extends Room<HouseState> {
   // read who the Spy is. The host picks first; the next player takes the other.
   private roles = new Map<string, "detective" | "spy">(); // sessionId -> role
   private hostSession: string | null = null;
+  /** Solo test room (the "(test)" button): the round starts with one player and
+   *  no second human, so a single person can explore and test the game. */
+  private solo = false;
 
   /** sessionId -> the action they're holding while stood at an anchor. */
   private held = new Map<string, number>();
@@ -638,7 +641,10 @@ export class HouseRoom extends Room<HouseState> {
     return best;
   }
 
-  onJoin(client: Client, options?: { name?: string; host?: boolean }) {
+  onJoin(client: Client, options?: { name?: string; host?: boolean; solo?: boolean }) {
+    // A solo test room lets one person start a round alone (the "(test)" button).
+    if (options?.solo) this.solo = true;
+
     // Take over a guest rather than adding one. This is the Spy mechanic:
     // an existing body at the party quietly stops being driven by the AI and
     // starts being driven by a person. Nothing about the body changes — same
@@ -710,10 +716,16 @@ export class HouseRoom extends Room<HouseState> {
     return spy ? this.bodyOf.get(spy) ?? null : null;
   }
 
-  /** Start once there's a Detective and a Spy (the two-human game). */
+  /** Start once there's a Detective and a Spy (the two-human game). In solo test
+   *  mode (the "(test)" button), start as soon as the one player has picked a
+   *  role — the other side is simply absent. */
   private maybeStartRound() {
     if (this.state.round.phase !== 0) return;
-    if (!this.sessionWithRole("detective") || !this.sessionWithRole("spy")) return;
+    if (this.solo) {
+      if (!this.sessionWithRole("detective") && !this.sessionWithRole("spy")) return;
+    } else if (!this.sessionWithRole("detective") || !this.sessionWithRole("spy")) {
+      return;
+    }
     this.state.round.phase = 1;
     this.state.round.guessesLeft = MAX_GUESSES;
     this.state.round.secondsLeft = Math.ceil(ROUND_MS / 1000);
