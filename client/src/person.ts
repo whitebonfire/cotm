@@ -273,7 +273,20 @@ const lerp = (a: number, b: number, t: number) => a + (b - a) * t;
  */
 export function animatePerson(rig: PersonRig, action: number, speed: number, dt: number, t: number) {
   const time = t + rig.phase;
-  const walking = speed > 0.3;
+  // Measured speed decides the walk cycle for bodies that can be in motion
+  // (walking, or standing idle and getting nudged). But an anchored action —
+  // sitting, reading, drinking, and so on — is planted: the body is doing that
+  // thing in place, so never let a little residual movement (easing into the
+  // seat, a settle that hovers around the threshold) flip it to the walk cycle.
+  // That flip is what made seated guests glitch between sitting and walking.
+  const planted =
+    action === Action.SIT ||
+    action === Action.READ ||
+    action === Action.DRINK ||
+    action === Action.EXAMINE ||
+    action === Action.TALK ||
+    action === Action.LOOK;
+  const walking = !planted && speed > 0.3;
 
   // Stride advances by DISTANCE, not time. One full cycle per STRIDE_METRES,
   // so a planted foot travels with the ground and never skates.
