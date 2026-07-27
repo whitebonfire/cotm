@@ -77,8 +77,8 @@ function limb(
   const r = Math.min(w, d) / 2;
   const len = Math.max(0.02, h - 2 * r);
   const mesh = new THREE.Mesh(
-    new THREE.CapsuleGeometry(r, len, 4, 10),
-    new THREE.MeshStandardMaterial({ color, roughness: 0.7 })
+    new THREE.CapsuleGeometry(r, len, 2, 6),
+    new THREE.MeshStandardMaterial({ color, roughness: 0.8, flatShading: true })
   );
   mesh.position.y = -h / 2;
   mesh.castShadow = true;
@@ -86,18 +86,19 @@ function limb(
 
   if (end?.kind === "hand") {
     const hand = new THREE.Mesh(
-      new THREE.SphereGeometry(r * 1.15, 10, 8),
-      new THREE.MeshStandardMaterial({ color: end.color, roughness: 0.85 })
+      new THREE.SphereGeometry(r * 1.1, 6, 5),
+      new THREE.MeshStandardMaterial({ color: end.color, roughness: 0.85, flatShading: true })
     );
     hand.position.y = -h;
+    hand.scale.set(1, 1.25, 0.75);
     hand.castShadow = true;
     pivot.add(hand);
   } else if (end?.kind === "shoe") {
     const shoe = new THREE.Mesh(
-      new THREE.BoxGeometry(w * 1.15, 0.07, d * 1.7),
-      new THREE.MeshStandardMaterial({ color: end.color, roughness: 0.5 })
+      new THREE.BoxGeometry(w * 1.2, 0.08, d * 2.0),
+      new THREE.MeshStandardMaterial({ color: end.color, roughness: 0.5, flatShading: true })
     );
-    shoe.position.set(0, -h - 0.01, d * 0.35); // toe points forward
+    shoe.position.set(0, -h - 0.01, d * 0.55); // toe points forward
     shoe.castShadow = true;
     pivot.add(shoe);
   }
@@ -126,135 +127,94 @@ export function buildPerson(look: Look): PersonRig {
       ? new THREE.Color(0xbfbfb8) // grey
       : new THREE.Color().setHSL((look.hairHue / 255) % 1, 0.5, 0.22);
 
-  const skinMat = new THREE.MeshStandardMaterial({ color: skin, roughness: 0.85 });
-  const shoeColor = 0x211d1a;
+  const skinMat = new THREE.MeshStandardMaterial({ color: skin, roughness: 0.85, flatShading: true });
+  const shirtMat = new THREE.MeshStandardMaterial({ color: outfit, roughness: 0.8, flatShading: true });
+  const shoeColor = 0x1b1b1f;
 
-  // ---- legs (trousers), ending in shoes
-  const legL = limb(trousers.getHex(), 0.17, 0.78, 0.19, 0.82, { color: shoeColor, kind: "shoe" });
-  const legR = limb(trousers.getHex(), 0.17, 0.78, 0.19, 0.82, { color: shoeColor, kind: "shoe" });
-  legL.position.x = -0.11;
-  legR.position.x = 0.11;
+  // ---- legs (trousers), slim, ending in shoes
+  const legL = limb(trousers.getHex(), 0.15, 0.82, 0.16, 0.82, { color: shoeColor, kind: "shoe" });
+  const legR = limb(trousers.getHex(), 0.15, 0.82, 0.16, 0.82, { color: shoeColor, kind: "shoe" });
+  legL.position.x = -0.1;
+  legR.position.x = 0.1;
   inner.add(legL, legR);
 
-  // ---- torso: a dress shirt with a collar and tie — formal partygoers
+  // ---- torso: a plain t-shirt (low-poly), slimmer than before
   const torso = new THREE.Group();
   torso.position.y = 0.82;
-  const chest = new THREE.Mesh(
-    new THREE.BoxGeometry(0.46, 0.62, 0.26),
-    new THREE.MeshStandardMaterial({ color: outfit, roughness: 0.6 })
-  );
-  chest.position.y = 0.31;
+  const chest = new THREE.Mesh(new THREE.BoxGeometry(0.4, 0.6, 0.22), shirtMat);
+  chest.position.y = 0.3;
   chest.castShadow = true;
   torso.add(chest);
 
-  // neck
-  const neck = new THREE.Mesh(new THREE.CylinderGeometry(0.062, 0.078, 0.14, 10), skinMat);
-  neck.position.y = 0.6;
+  // neck (skin, showing at the collar)
+  const neck = new THREE.Mesh(new THREE.CylinderGeometry(0.055, 0.07, 0.12, 6), skinMat);
+  neck.position.y = 0.58;
   neck.castShadow = true;
   torso.add(neck);
 
-  // collar — two flaps meeting in a V at the throat
-  const collarMat = new THREE.MeshStandardMaterial({
-    color: outfit.clone().offsetHSL(0, -0.05, 0.1),
-    roughness: 0.6,
-  });
-  for (const sx of [-1, 1]) {
-    const flap = new THREE.Mesh(new THREE.BoxGeometry(0.12, 0.1, 0.05), collarMat);
-    flap.position.set(sx * 0.07, 0.57, 0.12);
-    flap.rotation.z = sx * 0.5;
-    torso.add(flap);
-  }
-
-  // tie — a knot and a hanging blade in a dark contrast colour
-  const tieColor = new THREE.Color().setHSL((look.outfitHue / 255 + 0.45) % 1, 0.55, 0.24);
-  const tieMat = new THREE.MeshStandardMaterial({ color: tieColor, roughness: 0.5 });
-  const knot = new THREE.Mesh(new THREE.BoxGeometry(0.06, 0.06, 0.03), tieMat);
-  knot.position.set(0, 0.54, 0.135);
-  torso.add(knot);
-  const tie = new THREE.Mesh(new THREE.BoxGeometry(0.07, 0.3, 0.025), tieMat);
-  tie.position.set(0, 0.36, 0.135);
-  torso.add(tie);
-
   inner.add(torso);
 
-  // ---- arms (shirt sleeves), ending in hands
-  const armL = limb(outfit.getHex(), 0.12, 0.6, 0.14, 0.56, { color: skin, kind: "hand" });
-  const armR = limb(outfit.getHex(), 0.12, 0.6, 0.14, 0.56, { color: skin, kind: "hand" });
-  armL.position.x = -0.29;
-  armR.position.x = 0.29;
+  // ---- arms: bare skin, with short shirt sleeves and hands
+  const armL = limb(skin, 0.1, 0.62, 0.11, 0.56, { color: skin, kind: "hand" });
+  const armR = limb(skin, 0.1, 0.62, 0.11, 0.56, { color: skin, kind: "hand" });
+  armL.position.x = -0.24;
+  armR.position.x = 0.24;
+  for (const arm of [armL, armR]) {
+    const sleeve = new THREE.Mesh(new THREE.CylinderGeometry(0.082, 0.072, 0.2, 6), shirtMat);
+    sleeve.position.y = -0.1;
+    sleeve.castShadow = true;
+    arm.add(sleeve);
+  }
   torso.add(armL, armR);
 
-  // ---- head: a rounded skull with a real face
+  // ---- head: a clean low-poly head. Hair sits ON THE CROWN only, well above
+  // the eyes — never over the face.
   const head = new THREE.Group();
   head.position.y = 0.64;
 
-  const skull = new THREE.Mesh(new THREE.SphereGeometry(0.15, 20, 16), skinMat);
-  skull.scale.set(0.94, 1.06, 0.96);
-  skull.position.y = 0.15;
+  const skull = new THREE.Mesh(new THREE.SphereGeometry(0.13, 8, 7), skinMat);
+  skull.scale.set(0.9, 1.15, 0.95);
+  skull.position.y = 0.14;
   skull.castShadow = true;
   head.add(skull);
 
   // ears
   for (const sx of [-1, 1]) {
-    const ear = new THREE.Mesh(new THREE.SphereGeometry(0.033, 8, 6), skinMat);
-    ear.scale.set(0.7, 1, 1);
-    ear.position.set(sx * 0.142, 0.145, 0);
+    const ear = new THREE.Mesh(new THREE.SphereGeometry(0.026, 5, 4), skinMat);
+    ear.scale.set(0.6, 1, 1);
+    ear.position.set(sx * 0.118, 0.13, 0);
     head.add(ear);
   }
 
-  // eyes: white sclera with a coloured iris
-  const eyeWhite = new THREE.MeshStandardMaterial({ color: 0xf6f4ef, roughness: 0.35 });
-  const irisColor = [0x3a2a1a, 0x2c4257, 0x3f5133, 0x4a3524][(look.skin + look.hair) % 4];
-  const irisMat = new THREE.MeshStandardMaterial({ color: irisColor, roughness: 0.3 });
-  for (const sx of [-1, 1]) {
-    const eye = new THREE.Mesh(new THREE.SphereGeometry(0.033, 12, 10), eyeWhite);
-    eye.scale.z = 0.55;
-    eye.position.set(sx * 0.056, 0.17, 0.118);
-    head.add(eye);
-    const iris = new THREE.Mesh(new THREE.SphereGeometry(0.016, 10, 8), irisMat);
-    iris.position.set(sx * 0.056, 0.17, 0.142);
-    head.add(iris);
-  }
-
-  // eyebrows
-  const browMat = new THREE.MeshStandardMaterial({ color: hairColor, roughness: 0.95 });
-  for (const sx of [-1, 1]) {
-    const brow = new THREE.Mesh(new THREE.BoxGeometry(0.055, 0.014, 0.02), browMat);
-    brow.position.set(sx * 0.056, 0.216, 0.14);
-    brow.rotation.z = sx * -0.12;
-    head.add(brow);
-  }
-
-  // nose
-  const nose = new THREE.Mesh(new THREE.SphereGeometry(0.03, 8, 6), skinMat);
-  nose.scale.set(0.8, 0.95, 1.15);
-  nose.position.set(0, 0.14, 0.152);
+  // a small nose and understated eyes — no cartoon whites, brows or mouth
+  const nose = new THREE.Mesh(new THREE.BoxGeometry(0.035, 0.06, 0.05), skinMat);
+  nose.position.set(0, 0.115, 0.115);
   head.add(nose);
+  const eyeMat = new THREE.MeshStandardMaterial({ color: 0x2a201a, roughness: 0.5, flatShading: true });
+  for (const sx of [-1, 1]) {
+    const eye = new THREE.Mesh(new THREE.SphereGeometry(0.02, 6, 5), eyeMat);
+    eye.scale.set(1, 1.25, 0.4);
+    eye.position.set(sx * 0.05, 0.145, 0.108);
+    head.add(eye);
+  }
 
-  // mouth
-  const mouth = new THREE.Mesh(
-    new THREE.BoxGeometry(0.062, 0.016, 0.02),
-    new THREE.MeshStandardMaterial({ color: 0x7a3f38, roughness: 0.6 })
-  );
-  mouth.position.set(0, 0.088, 0.142);
-  head.add(mouth);
-
-  // hair as a rounded cap over the crown
+  // hair: a low crown cap (never reaches the eyes), plus a back piece if long
   if (look.hair > 0) {
-    const hairMat = new THREE.MeshStandardMaterial({ color: hairColor, roughness: 0.95 });
+    const hairMat = new THREE.MeshStandardMaterial({ color: hairColor, roughness: 0.9, flatShading: true });
     const cap = new THREE.Mesh(
-      new THREE.SphereGeometry(0.157, 16, 12, 0, Math.PI * 2, 0, Math.PI * 0.6),
+      new THREE.SphereGeometry(0.14, 8, 6, 0, Math.PI * 2, 0, Math.PI * 0.4),
       hairMat
     );
-    cap.scale.set(1.02, look.hair === 1 ? 0.75 : 1.05, 1.04);
-    cap.position.y = 0.16;
+    cap.scale.set(1.04, look.hair === 1 ? 0.8 : 1.05, 1.08);
+    cap.position.set(0, 0.15, -0.008);
     cap.castShadow = true;
     head.add(cap);
 
     if (look.hair >= 3) {
-      const back = new THREE.Mesh(new THREE.SphereGeometry(0.14, 12, 10), hairMat);
-      back.scale.set(1, 0.9, 0.7);
-      back.position.set(0, 0.08, -0.06);
+      // longer at the back only
+      const back = new THREE.Mesh(new THREE.SphereGeometry(0.12, 8, 6), hairMat);
+      back.scale.set(1, 0.85, 0.6);
+      back.position.set(0, 0.07, -0.07);
       head.add(back);
     }
   }
