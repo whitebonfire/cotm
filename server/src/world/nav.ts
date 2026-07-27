@@ -158,9 +158,95 @@ export function findDoorPath(fromRoom: string, toRoom: string): Door[] {
 }
 
 /**
+ * The dining table is the one obstacle a within-room straight line can cut
+ * through: it sits in the middle of the room with seats all around it, so a
+ * guest walking to a seat on the far side aims a line right across it, gets
+ * stopped by the collider, and grinds back and forth along the edge. Doorways
+ * are the only waypoints routeTo plans otherwise, so we special-case the table
+ * and steer around it via its corners. Must match the collider in furniture.ts
+ * (cx 12.5, cz 4, hw 3.25, hd 1.3 -> x 9.25..15.75, z 2.7..5.3).
+ */
+const TABLE = { xmin: 9.25, xmax: 15.75, zmin: 2.7, zmax: 5.3 };
+
+/** Does the segment A->B pass through the table (padded by `pad`)? Liang-Barsky
+ *  segment/box clip. */
+function segHitsTable(ax: number, az: number, bx: number, bz: number, pad = 0.5): boolean {
+  const xmin = TABLE.xmin - pad;
+  const xmax = TABLE.xmax + pad;
+  const zmin = TABLE.zmin - pad;
+  const zmax = TABLE.zmax + pad;
+  const dx = bx - ax;
+  const dz = bz - az;
+  const p = [-dx, dx, -dz, dz];
+  const q = [ax - xmin, xmax - ax, az - zmin, zmax - az];
+  let t0 = 0;
+  let t1 = 1;
+  for (let i = 0; i < 4; i++) {
+    if (p[i] === 0) {
+      if (q[i] < 0) return false; // parallel and outside this slab
+    } else {
+      const r = q[i] / p[i];
+      if (p[i] < 0) {
+        if (r > t1) return false;
+        if (r > t0) t0 = r;
+      } else {
+        if (r < t0) return false;
+        if (r < t1) t1 = r;
+      }
+    }
+  }
+  return t0 <= t1;
+}
+
+/** Waypoints to get from A to B around the table, or [] if the straight line is
+ *  already clear. The four corners sit outside the collider; we take the
+ *  shortest one- or two-corner detour whose legs are all clear. */
+function tableDetour(
+  ax: number,
+  az: number,
+  bx: number,
+  bz: number
+): Array<{ x: number; z: number }> {
+  if (!segHitsTable(ax, az, bx, bz)) return [];
+  const c = 0.95; // corner clearance, wider than the crossing pad
+  const corners = [
+    { x: TABLE.xmin - c, z: TABLE.zmin - c },
+    { x: TABLE.xmax + c, z: TABLE.zmin - c },
+    { x: TABLE.xmin - c, z: TABLE.zmax + c },
+    { x: TABLE.xmax + c, z: TABLE.zmax + c },
+  ];
+  for (const k of corners) {
+    if (!segHitsTable(ax, az, k.x, k.z) && !segHitsTable(k.x, k.z, bx, bz)) return [k];
+  }
+  let best: Array<{ x: number; z: number }> | null = null;
+  let bestLen = Infinity;
+  for (const k1 of corners) {
+    for (const k2 of corners) {
+      if (k1 === k2) continue;
+      if (
+        segHitsTable(ax, az, k1.x, k1.z) ||
+        segHitsTable(k1.x, k1.z, k2.x, k2.z) ||
+        segHitsTable(k2.x, k2.z, bx, bz)
+      )
+        continue;
+      const len =
+        Math.hypot(k1.x - ax, k1.z - az) +
+        Math.hypot(k2.x - k1.x, k2.z - k1.z) +
+        Math.hypot(bx - k2.x, bz - k2.z);
+      if (len < bestLen) {
+        bestLen = len;
+        best = [k1, k2];
+      }
+    }
+  }
+  return best ?? [];
+}
+
+/**
  * Waypoints from a position to an anchor: every doorway on the way, then the
  * anchor itself. Doorways are aimed at slightly, not exactly — a body that
  * steers for the precise centre of an opening scrapes the frame on the way in.
+ * Segments that lie within the dining room are routed around the table.
  */
 export function routeTo(fromX: number, fromZ: number, anchor: Anchor): Array<{ x: number; z: number }> {
   const from = roomAt(fromX, fromZ);
@@ -195,7 +281,21 @@ export function routeTo(fromX: number, fromZ: number, anchor: Anchor): Array<{ x
   }
 
   points.push({ x: anchor.x, z: anchor.z });
-  return points;
+
+  // Insert table detours for any segment that runs within the dining room, so a
+  // guest crossing to a far seat walks around the table instead of into it.
+  const routed: Array<{ x: number; z: number }> = [];
+  let px = fromX;
+  let pz = fromZ;
+  for (const p of points) {
+    if (roomAt(px, pz)?.id === "dining" && roomAt(p.x, p.z)?.id === "dining") {
+      for (const d of tableDetour(px, pz, p.x, p.z)) routed.push(d);
+    }
+    routed.push(p);
+    px = p.x;
+    pz = p.z;
+  }
+  return routed;
 }
 
 export function anchorsIn(roomId: string): Anchor[] {
