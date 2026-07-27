@@ -107,6 +107,61 @@ function limb(
   return pivot;
 }
 
+/**
+ * A low-poly HEAD, not a ball: an icosahedron elongated a little, tapered below
+ * the cheekbones into a jaw and chin, with the face plane flattened. Geometry is
+ * centred on its own origin; the caller positions it. flatShading on the
+ * material makes the facets read.
+ */
+function makeHeadGeometry(): THREE.BufferGeometry {
+  const g = new THREE.IcosahedronGeometry(0.135, 1);
+  const p = g.attributes.position;
+  const v = new THREE.Vector3();
+  for (let i = 0; i < p.count; i++) {
+    v.fromBufferAttribute(p, i);
+    v.y *= 1.2; // taller than wide
+    if (v.y < 0) {
+      // jaw: pull the sides in toward a chin the lower we go
+      const t = Math.min(1, -v.y / 0.16);
+      const taper = 1 - 0.5 * t;
+      v.x *= taper;
+      v.z *= taper;
+      v.y -= 0.035 * t * t; // extend the chin down
+    }
+    if (v.z > 0) v.z *= 0.9; // flatten the face
+    p.setXYZ(i, v.x, v.y, v.z);
+  }
+  g.computeVertexNormals();
+  return g;
+}
+
+/**
+ * Short swept hair that hugs the head as a shell: everything below a hairline is
+ * collapsed onto that line, and the hairline is HIGH across the forehead and
+ * lower at the back and sides — so it never falls over the eyes.
+ */
+function makeHairGeometry(): THREE.BufferGeometry {
+  const g = new THREE.IcosahedronGeometry(0.147, 1);
+  const p = g.attributes.position;
+  const v = new THREE.Vector3();
+  for (let i = 0; i < p.count; i++) {
+    v.fromBufferAttribute(p, i);
+    v.y *= 1.2;
+    const fz = v.z / 0.147; // -1 back .. +1 front
+    // high at the front (well above the eyes), low at the back
+    const hairline = 0.03 + Math.max(0, fz) * 0.055 - Math.max(0, -fz) * 0.05;
+    if (v.y < hairline) {
+      v.y = hairline;
+      v.x *= 0.95;
+      v.z *= 0.95;
+    }
+    if (v.z > 0) v.z *= 0.9;
+    p.setXYZ(i, v.x, v.y, v.z);
+  }
+  g.computeVertexNormals();
+  return g;
+}
+
 export function buildPerson(look: Look): PersonRig {
   const group = new THREE.Group();
 
@@ -172,9 +227,8 @@ export function buildPerson(look: Look): PersonRig {
   const head = new THREE.Group();
   head.position.y = 0.64;
 
-  const skull = new THREE.Mesh(new THREE.SphereGeometry(0.13, 8, 7), skinMat);
-  skull.scale.set(0.9, 1.15, 0.95);
-  skull.position.y = 0.14;
+  const skull = new THREE.Mesh(makeHeadGeometry(), skinMat);
+  skull.position.y = 0.15;
   skull.castShadow = true;
   head.add(skull);
 
@@ -198,25 +252,13 @@ export function buildPerson(look: Look): PersonRig {
     head.add(eye);
   }
 
-  // hair: a low crown cap (never reaches the eyes), plus a back piece if long
+  // hair: a swept shell hugging the head, hairline high over the forehead
   if (look.hair > 0) {
     const hairMat = new THREE.MeshStandardMaterial({ color: hairColor, roughness: 0.9, flatShading: true });
-    const cap = new THREE.Mesh(
-      new THREE.SphereGeometry(0.14, 8, 6, 0, Math.PI * 2, 0, Math.PI * 0.4),
-      hairMat
-    );
-    cap.scale.set(1.04, look.hair === 1 ? 0.8 : 1.05, 1.08);
-    cap.position.set(0, 0.15, -0.008);
-    cap.castShadow = true;
-    head.add(cap);
-
-    if (look.hair >= 3) {
-      // longer at the back only
-      const back = new THREE.Mesh(new THREE.SphereGeometry(0.12, 8, 6), hairMat);
-      back.scale.set(1, 0.85, 0.6);
-      back.position.set(0, 0.07, -0.07);
-      head.add(back);
-    }
+    const hair = new THREE.Mesh(makeHairGeometry(), hairMat);
+    hair.position.copy(skull.position);
+    hair.castShadow = true;
+    head.add(hair);
   }
 
   if (look.hat > 0) {
