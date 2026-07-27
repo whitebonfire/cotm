@@ -123,14 +123,9 @@ b.room.send("ability", { id: "inspection" });
 check("the spy can't seal", !!(await b.waitFor("ability_denied", 1000)));
 a.clear(); b.clear();
 
-// ---- IMPERSONATE (idle spy fidgets like a guest, so it isn't frozen)
-b.room.send("ability", { id: "impersonate" });
-const imp = await b.waitFor("ability_used", 1500);
-check("the spy can impersonate", imp?.id === "impersonate" && imp.durationMs > 0, imp ? `${imp.durationMs}ms` : "no");
-const yaw0 = bobPos().yaw;
-for (let i = 0; i < 30; i++) { b.room.send("input", { f: 0, r: 0, yaw: 0 }); await sleep(40); }
-const yaw1 = bobPos().yaw;
-check("impersonate makes an idle spy shift like a guest", Math.abs(yaw1 - yaw0) > 0.01, `Δyaw ${(yaw1 - yaw0).toFixed(3)}`);
+// ---- IMPERSONATE role gate. The actual walking test runs LAST, because it
+// puts bob's body on NPC autopilot for the ability's duration — which would
+// hijack any test that tries to steer bob afterwards.
 a.room.send("ability", { id: "impersonate" });
 check("the detective can't impersonate", !!(await a.waitFor("ability_denied", 1000)));
 a.clear(); b.clear();
@@ -216,6 +211,21 @@ const after = a.room.state.round.secondsLeft;
 check("snap adds a minute to the clock", after - before >= 55, `${before} -> ${after}`);
 const photo = await a.waitFor("photographed", 1500);
 check("the detective is told they were photographed", !!photo && photo.secondsAdded >= 55);
+
+// ---- IMPERSONATE (runs last): the spy's body goes on NPC autopilot and walks
+// around on its own, mirroring a guest, with NO input from the player.
+b.clear();
+b.room.send("ability", { id: "impersonate" });
+const imp = await b.waitFor("ability_used", 1500);
+check("the spy can impersonate", imp?.id === "impersonate" && imp.durationMs > 0, imp ? `${imp.durationMs}ms` : "no");
+const startPos = { x: bobPos().x, z: bobPos().z };
+let moved = 0;
+for (let i = 0; i < 140; i++) { // up to ~7s, sending NO input
+  await sleep(50);
+  moved = Math.max(moved, Math.hypot(bobPos().x - startPos.x, bobPos().z - startPos.z));
+  if (moved > 0.6) break;
+}
+check("impersonate walks the spy around on its own (no input)", moved > 0.6, `moved ${moved.toFixed(2)}m`);
 
 await a.room.leave();
 await b.room.leave();

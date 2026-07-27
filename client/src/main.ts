@@ -987,8 +987,11 @@ let sendAccum = 0;
 let elapsed = 0;
 
 function currentInput() {
-  // Hands are on the tablet, or on the typing box — you don't walk either way.
-  if (tablet.up || beingInterviewed) return { f: 0, r: 0, yaw: camYaw, mag: magnify };
+  // Hands are on the tablet, on the typing box, or the body is on NPC autopilot
+  // while impersonating — you don't steer in any of those cases.
+  if (tablet.up || beingInterviewed || Date.now() < impersonateActiveUntil) {
+    return { f: 0, r: 0, yaw: camYaw, mag: magnify };
+  }
   const f = (keys.has("KeyW") ? 1 : 0) - (keys.has("KeyS") ? 1 : 0);
   const r = (keys.has("KeyD") ? 1 : 0) - (keys.has("KeyA") ? 1 : 0);
   return { f, r, yaw: camYaw, mag: magnify };
@@ -1011,8 +1014,9 @@ function tick() {
 
   const self = myBody ? bodies.get(myBody) : undefined;
 
-  if (self && beingInterviewed) {
-    // The server is autopiloting our body while we type — just follow it, the
+  if (self && (beingInterviewed || Date.now() < impersonateActiveUntil)) {
+    // The server is autopiloting our body — while we type an interview answer,
+    // or while `impersonate` walks us around like a guest. Just follow it, the
     // same way we follow any other guest, so we don't fight the AI's steering.
     localPos.lerp(new THREE.Vector3(self.person.x, self.person.y, self.person.z), 1 - Math.pow(0.0015, dt));
     self.rig.group.position.copy(localPos);

@@ -540,6 +540,16 @@ export class HouseRoom extends Room<HouseState> {
       }
       this.setCooldown(session, id, IMPERSONATE_COOLDOWN_MS);
       this.impersonateUntil = now + IMPERSONATE_DURATION_MS;
+      // Hand the Spy's body to the NPC brain for the duration: it picks anchors,
+      // walks to them and performs actions exactly like a guest, so a watching
+      // Detective sees ordinary partygoer behaviour (SOW §4.3). This is the same
+      // autopilot used while a human is being interviewed. Human steering is
+      // ignored until it lifts (see the tick).
+      const body = this.bodyOf.get(session);
+      if (body && !this.autopilot.has(body)) {
+        this.autopilot.add(body);
+        this.brains.get(body)?.resume();
+      }
       client.send("ability_used", { id, cooldownMs: IMPERSONATE_COOLDOWN_MS, durationMs: IMPERSONATE_DURATION_MS });
       return;
     }
@@ -925,6 +935,14 @@ export class HouseRoom extends Room<HouseState> {
       this.sendDetectiveMark();
     }
     if (this.seal && now >= this.seal.until) this.seal = null;
+    // When `impersonate` lifts, take the Spy's body off NPC autopilot and hand
+    // steering back to the human.
+    if (this.impersonateUntil && now >= this.impersonateUntil) {
+      this.impersonateUntil = 0;
+      const spy = this.sessionWithRole("spy");
+      const body = spy ? this.bodyOf.get(spy) : null;
+      if (body) this.endAutopilot(body);
+    }
 
     // ---- auto-close idle interviews, so a human target isn't pinned in the
     // chat (and on autopilot) forever if the Detective wanders off.
@@ -966,18 +984,10 @@ export class HouseRoom extends Room<HouseState> {
 
       const len = Math.hypot(dx, dz);
       if (len < 0.001) {
-        // Standing still: hold whatever they're pretending to do.
+        // Standing still: hold whatever they're pretending to do. (While
+        // `impersonate` is up the body is on NPC autopilot and never reaches
+        // this loop — the brain drives it, walking and all.)
         person.action = this.held.get(sessionId) ?? Action.IDLE;
-        // Impersonate: while it's up, an idle Spy gently turns to look around —
-        // NPCs do this, and a frozen body is the clearest tell of a player who
-        // has stopped moving (SOW §4.3).
-        if (
-          this.roles.get(sessionId) === "spy" &&
-          now < this.impersonateUntil &&
-          !this.held.has(sessionId)
-        ) {
-          person.yaw += Math.sin(now / 900) * 0.03;
-        }
         continue;
       }
 
