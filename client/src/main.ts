@@ -1195,10 +1195,13 @@ function tick() {
           ? `<b>Q</b> tablet · <b>E</b> join in · abilities below`
           : `<b>E</b> steal / give / join in · abilities below`;
     const flashLine = elapsed < flashUntil ? `<span style="color:#d8b46a">${flash}</span>` : "";
+    // Show your own account username here, not the guest you took over.
+    const myName =
+      account?.name || localStorage.getItem("cotm:name") || self?.person.name || "…";
     hud.innerHTML = [
       `<b>🔎 clues of the mind</b> ${roleTag}${clock}`,
       `<b>${here?.name ?? "…"}</b> · ${bodies.size} guests`,
-      `you are <b>${self?.person.name ?? "…"}</b>, ${doing}`,
+      `you are <b>${myName}</b>, ${doing}`,
       hint,
       flashLine,
     ].filter(Boolean).join("<br />");
