@@ -230,10 +230,11 @@ export function buildPerson(look: Look): PersonRig {
       flatShading: true,
     });
     const skirt = new THREE.Mesh(
-      new THREE.CylinderGeometry(0.16, 0.31, 0.44, 8, 1, true),
+      new THREE.CylinderGeometry(0.17, 0.32, 0.5, 8, 1, true),
       skirtMat
     );
-    skirt.position.y = 0.6; // waist (0.82) down to the knee
+    // Overlap up past the bodice waist so there's no seam/gap at the join.
+    skirt.position.y = 0.62; // top ~0.87 (over the bodice) down to the knee ~0.37
     skirt.castShadow = true;
     inner.add(skirt);
   }
@@ -297,8 +298,16 @@ export function buildPerson(look: Look): PersonRig {
   const sleeveColor = dress ? skin : jacketColor.getHex();
   const armL = limb(sleeveColor, 0.1, 0.62, 0.11, 0.56, { color: skin, kind: "hand" });
   const armR = limb(sleeveColor, 0.1, 0.62, 0.11, 0.56, { color: skin, kind: "hand" });
-  armL.position.x = -0.23;
-  armR.position.x = 0.23;
+  armL.position.x = -0.2;
+  armR.position.x = 0.2;
+  // Shoulders bridge the arm to the torso so the arms don't look detached.
+  const shoulderMat = new THREE.MeshStandardMaterial({ color: sleeveColor, roughness: 0.7, flatShading: true });
+  for (const sx of [-1, 1]) {
+    const shoulder = new THREE.Mesh(new THREE.SphereGeometry(0.095, 6, 5), shoulderMat);
+    shoulder.position.set(sx * 0.18, 0.55, 0);
+    shoulder.castShadow = true;
+    torso.add(shoulder);
+  }
   torso.add(armL, armR);
 
   // ---- head: a clean low-poly head. Hair sits ON THE CROWN only, well above
