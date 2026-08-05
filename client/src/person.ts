@@ -191,63 +191,114 @@ export function buildPerson(look: Look): PersonRig {
   group.add(inner);
 
   const skin = SKINS[look.skin % SKINS.length];
-  const outfit = new THREE.Color().setHSL(
-    (look.outfitHue / 255) % 1,
-    0.32,
-    0.18 + (look.outfitVal / 255) * 0.34
-  );
-  const trousers = outfit.clone().offsetHSL(0, 0, -0.09);
   const hairColor =
     look.hairHue === 0
       ? new THREE.Color(0xbfbfb8) // grey
       : new THREE.Color().setHSL((look.hairHue / 255) % 1, 0.5, 0.22);
 
-  const skinMat = new THREE.MeshStandardMaterial({ color: skin, roughness: 0.85, flatShading: true });
-  const shirtMat = new THREE.MeshStandardMaterial({ color: outfit, roughness: 0.8, flatShading: true });
-  const shoeColor = 0x1b1b1f;
+  // Formal cocktail-party attire (the SpyParty look): suits/tuxedos and cocktail
+  // dresses. Whether a guest wears a suit or a dress is derived only from synced
+  // `look` fields, so every client — and a disguised Spy — renders identically.
+  const hue = (look.outfitHue / 255) % 1;
+  const dress = (look.outfitHue * 7 + look.hair * 13 + look.height) % 100 < 45;
+  const bold = look.outfitVal > 200; // the occasional bright suit / dress
+  const jacketColor = dress
+    ? new THREE.Color().setHSL(hue, 0.55, 0.24 + (look.outfitVal / 255) * 0.2) // jewel-tone dress
+    : bold
+      ? new THREE.Color().setHSL(hue, 0.5, 0.32) // a bold suit (blue, wine, plum)
+      : new THREE.Color().setHSL(hue, 0.35, 0.09 + (look.outfitVal / 255) * 0.1); // dark suit
+  const trouserColor = new THREE.Color().setHSL(hue, 0.25, 0.07); // near-black dress trousers
+  const shirtWhite = 0xe9e5da;
 
-  // ---- legs (trousers), slim, ending in shoes
-  const legL = limb(trousers.getHex(), 0.15, 0.82, 0.16, 0.82, { color: shoeColor, kind: "shoe" });
-  const legR = limb(trousers.getHex(), 0.15, 0.82, 0.16, 0.82, { color: shoeColor, kind: "shoe" });
+  const skinMat = new THREE.MeshStandardMaterial({ color: skin, roughness: 0.85, flatShading: true });
+  const jacketMat = new THREE.MeshStandardMaterial({ color: jacketColor, roughness: 0.6, flatShading: true });
+  const shoeColor = 0x151317;
+
+  // ---- legs: dark trousers + dress shoes (suit) or bare legs + heels (dress)
+  const legColor = dress ? skin : trouserColor.getHex();
+  const legL = limb(legColor, 0.15, 0.82, 0.16, 0.82, { color: shoeColor, kind: "shoe" });
+  const legR = limb(legColor, 0.15, 0.82, 0.16, 0.82, { color: shoeColor, kind: "shoe" });
   legL.position.x = -0.1;
   legR.position.x = 0.1;
   inner.add(legL, legR);
 
-  // ---- torso: a shaped low-poly t-shirt (shoulders -> waist), with a V-neck
+  // A cocktail dress: a flared skirt from the waist to the knee, over the legs.
+  if (dress) {
+    const skirtMat = new THREE.MeshStandardMaterial({
+      color: jacketColor.clone().offsetHSL(0, 0, -0.03),
+      roughness: 0.7,
+      flatShading: true,
+    });
+    const skirt = new THREE.Mesh(
+      new THREE.CylinderGeometry(0.16, 0.31, 0.44, 8, 1, true),
+      skirtMat
+    );
+    skirt.position.y = 0.6; // waist (0.82) down to the knee
+    skirt.castShadow = true;
+    inner.add(skirt);
+  }
+
+  // ---- torso: a shaped jacket / bodice (shoulders -> waist)
   const torso = new THREE.Group();
   torso.position.y = 0.82;
-  const chest = new THREE.Mesh(makeTorsoGeometry(), shirtMat);
+  const chest = new THREE.Mesh(makeTorsoGeometry(), jacketMat);
   chest.position.y = 0.3; // spans hip (0) to shoulders (0.6)
   chest.castShadow = true;
   torso.add(chest);
 
-  // neck (skin, showing above the collar)
+  // neck (skin, above the collar)
   const neck = new THREE.Mesh(new THREE.CylinderGeometry(0.055, 0.07, 0.14, 6), skinMat);
   neck.position.y = 0.585;
   neck.castShadow = true;
   torso.add(neck);
 
-  // V-neck: a small wedge of skin at the throat (apex pointing down)
-  const vneck = new THREE.Mesh(new THREE.ConeGeometry(0.05, 0.11, 3), skinMat);
-  vneck.rotation.x = Math.PI;
-  vneck.scale.z = 0.4;
-  vneck.position.set(0, 0.52, 0.14);
-  torso.add(vneck);
+  if (dress) {
+    // a lighter neckline trim
+    const trim = new THREE.Mesh(
+      new THREE.ConeGeometry(0.09, 0.14, 3),
+      new THREE.MeshStandardMaterial({ color: jacketColor.clone().offsetHSL(0, -0.1, 0.14), roughness: 0.6, flatShading: true })
+    );
+    trim.rotation.x = Math.PI;
+    trim.scale.z = 0.4;
+    trim.position.set(0, 0.5, 0.135);
+    torso.add(trim);
+  } else {
+    // a suit: white shirt V, lapels, and a tie (bow tie for the top-hat set)
+    const shirt = new THREE.Mesh(
+      new THREE.ConeGeometry(0.085, 0.34, 3),
+      new THREE.MeshStandardMaterial({ color: shirtWhite, roughness: 0.55, flatShading: true })
+    );
+    shirt.rotation.x = Math.PI;
+    shirt.scale.z = 0.35;
+    shirt.position.set(0, 0.44, 0.125);
+    torso.add(shirt);
+    for (const sx of [-1, 1]) {
+      const lapel = new THREE.Mesh(new THREE.BoxGeometry(0.085, 0.26, 0.04), jacketMat);
+      lapel.position.set(sx * 0.085, 0.45, 0.135);
+      lapel.rotation.z = sx * 0.3;
+      torso.add(lapel);
+    }
+    const tieColor = new THREE.Color().setHSL((hue + 0.5) % 1, 0.5, 0.28);
+    const tieMat = new THREE.MeshStandardMaterial({ color: tieColor, roughness: 0.5, flatShading: true });
+    if (look.hat === 1) {
+      const bow = new THREE.Mesh(new THREE.BoxGeometry(0.09, 0.032, 0.03), tieMat);
+      bow.position.set(0, 0.55, 0.15);
+      torso.add(bow);
+    } else {
+      const tie = new THREE.Mesh(new THREE.BoxGeometry(0.045, 0.26, 0.02), tieMat);
+      tie.position.set(0, 0.41, 0.15);
+      torso.add(tie);
+    }
+  }
 
   inner.add(torso);
 
-  // ---- arms: bare skin, with flared short sleeves and hands
-  const armL = limb(skin, 0.1, 0.62, 0.11, 0.56, { color: skin, kind: "hand" });
-  const armR = limb(skin, 0.1, 0.62, 0.11, 0.56, { color: skin, kind: "hand" });
+  // ---- arms: jacket sleeves (suit) or bare (dress), ending in hands
+  const sleeveColor = dress ? skin : jacketColor.getHex();
+  const armL = limb(sleeveColor, 0.1, 0.62, 0.11, 0.56, { color: skin, kind: "hand" });
+  const armR = limb(sleeveColor, 0.1, 0.62, 0.11, 0.56, { color: skin, kind: "hand" });
   armL.position.x = -0.23;
   armR.position.x = 0.23;
-  for (const arm of [armL, armR]) {
-    // a short cap sleeve, wider at the opening so it flares off the shoulder
-    const sleeve = new THREE.Mesh(new THREE.CylinderGeometry(0.075, 0.1, 0.22, 6), shirtMat);
-    sleeve.position.y = -0.09;
-    sleeve.castShadow = true;
-    arm.add(sleeve);
-  }
   torso.add(armL, armR);
 
   // ---- head: a clean low-poly head. Hair sits ON THE CROWN only, well above
