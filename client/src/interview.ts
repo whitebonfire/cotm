@@ -12,6 +12,8 @@
 
 export interface BeginData {
   cap: number;
+  /** The guest name you're wearing — the Detective addresses you by it. */
+  name: string;
   persona: { job: string; tie: string; reason: string; host: string };
 }
 
@@ -73,6 +75,7 @@ export class InterviewBox {
     this.thread.innerHTML = "";
     (this.root.querySelector(".tb-persona") as HTMLDivElement).innerHTML = `
       <div class="tb-label">you are</div>
+      <div class="tb-name">${escapeHtml(data.name ?? "")}</div>
       ${escapeHtml(data.persona.job)}, ${escapeHtml(data.persona.tie)}.
       You ${escapeHtml(data.persona.reason)}. The host is ${escapeHtml(data.persona.host)}.
       <div class="tb-hint">answer their questions as this guest</div>`;

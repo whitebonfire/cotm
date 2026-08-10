@@ -427,9 +427,14 @@ const hud = document.getElementById("hud") as HTMLDivElement;
 const roleOverlay = document.getElementById("roleoverlay") as HTMLDivElement;
 const roleBody = roleOverlay.querySelector(".role-body") as HTMLDivElement;
 const roundOverlay = document.getElementById("roundover") as HTMLDivElement;
-(roundOverlay.querySelector(".ro-again") as HTMLButtonElement).addEventListener("click", () =>
-  location.reload()
-);
+const roAgainBtn = roundOverlay.querySelector(".ro-again") as HTMLButtonElement;
+roAgainBtn.addEventListener("click", () => {
+  // If we came from a lobby we're still connected to it — go back and wait
+  // there, so a finished round doesn't kick you out. Otherwise (solo/quickplay)
+  // a reload is the way back to the menu.
+  if (lobbyRoom) backToLobby();
+  else location.reload();
+});
 
 function showRoundOver(m: { outcome: string; reason: string; spyName: string }) {
   const youWon =
@@ -443,8 +448,27 @@ function showRoundOver(m: { outcome: string; reason: string; spyName: string }) 
   (roundOverlay.querySelector(".ro-spy") as HTMLDivElement).innerHTML = m.spyName
     ? `the spy was <b>${m.spyName}</b>`
     : "";
+  roAgainBtn.textContent = lobbyRoom ? "back to lobby" : "play again";
   roundOverlay.classList.remove("hidden");
   document.exitPointerLock();
+}
+
+/** Leave the finished round and return to the lobby we're still connected to. */
+function backToLobby() {
+  if (room) {
+    leavingOnPurpose = true;
+    try {
+      room.leave();
+    } catch {
+      /* already gone */
+    }
+    room = null;
+  }
+  clearWorld();
+  roundOverlay.classList.add("hidden");
+  showScreen("screen-lobby");
+  $id("lobby-error").textContent = "";
+  if (lobbyRoom) renderLobby(lobbyRoom);
 }
 
 /** Your role for the round. null until the server assigns it. The Spy has no
@@ -552,12 +576,16 @@ function showScreen(id: string) {
 
 let account: { name: string; friendCode: string } | null = null;
 let lobbyRoom: Room<LobbyState> | null = null;
+/** True while we're deliberately leaving a house room, so its onLeave doesn't
+ *  report a "disconnected" error for something we asked for. */
+let leavingOnPurpose = false;
 
 /** Drop any old room, join a house room, wire it, and reveal the game. Used by
  *  both quick-play (joinOrCreate) and the lobby hand-off (joinById). */
 async function connectHouse(join: (c: Client) => Promise<Room<HouseState>>) {
   // Do NOT await leave(): a dead socket's leave() promise never resolves.
   if (room) {
+    leavingOnPurpose = true;
     try {
       room.leave(false);
     } catch {
@@ -567,6 +595,8 @@ async function connectHouse(join: (c: Client) => Promise<Room<HouseState>>) {
   }
   clearWorld();
   room = await join(net);
+  // From here on a leave we didn't ask for really is a disconnection.
+  leavingOnPurpose = false;
   wire(room);
   overlay.classList.add("hidden");
 }
@@ -723,14 +753,15 @@ function wireLobby(lobby: Room<LobbyState>) {
   $$(lobby.state).players.onRemove(render);
 
   lobby.onMessage("start_game", async (m: { roomId: string; host?: boolean }) => {
-    lobbyRoom = null;
+    // Stay connected to the lobby while we play, so the round ending drops us
+    // back here instead of kicking us out to the menu.
     try {
       await connectHouse((c) =>
         c.joinById<HouseState>(m.roomId, { name: account?.name ?? "", host: !!m.host })
       );
     } catch (err) {
-      showScreen("screen-menu");
-      menuError("Couldn't join the round. " + String(err));
+      showScreen("screen-lobby");
+      $id("lobby-error").textContent = "Couldn't join the round. " + String(err);
     }
   });
   lobby.onMessage("lobby_error", (m: { reason: string }) => ($id("lobby-error").textContent = m.reason));
@@ -970,6 +1001,9 @@ function wire(room: Room<HouseState>) {
     // Drop the frozen scene immediately rather than leaving 12 stale ghosts
     // sitting behind the overlay waiting to be doubled on rejoin.
     clearWorld();
+    // A leave we asked for (going back to the lobby, or starting another round)
+    // isn't a disconnection — don't scare the player or fight the lobby screen.
+    if (leavingOnPurpose) return;
     hud.innerHTML = `<b>disconnected</b> (code ${code})`;
     overlay.classList.remove("hidden");
     playBtn.disabled = false;
@@ -1195,9 +1229,13 @@ function tick() {
           ? `<b>Q</b> tablet · <b>E</b> join in · abilities below`
           : `<b>E</b> steal / give / join in · abilities below`;
     const flashLine = elapsed < flashUntil ? `<span style="color:#d8b46a">${flash}</span>` : "";
-    // Show your own account username here, not the guest you took over.
+    // The Detective sees their own account username — they aren't pretending to
+    // be anyone. The Spy sees the GUEST name they're wearing, because that's the
+    // identity they have to keep straight and answer to.
     const myName =
-      account?.name || localStorage.getItem("cotm:name") || self?.person.name || "…";
+      myRole === "spy"
+        ? self?.person.name || "…"
+        : account?.name || localStorage.getItem("cotm:name") || self?.person.name || "…";
     hud.innerHTML = [
       `<b>🔎 clues of the mind</b> ${roleTag}${clock}`,
       `<b>${here?.name ?? "…"}</b> · ${bodies.size} guests`,

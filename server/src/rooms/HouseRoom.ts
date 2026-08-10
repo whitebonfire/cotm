@@ -334,6 +334,9 @@ export class HouseRoom extends Room<HouseState> {
       const humanClient = this.clients.find((c) => c.sessionId === interview.humanTarget);
       humanClient?.send("interview_begin", {
         cap: ANSWER_CAP,
+        // The guest name you're wearing — the Detective will address you by it,
+        // so you need to know it to answer in character.
+        name: person.name,
         persona: { job: persona.job, tie: persona.tie, reason: persona.reason, host: this.host },
       });
     }

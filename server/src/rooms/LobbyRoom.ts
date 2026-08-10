@@ -87,7 +87,12 @@ export class LobbyRoom extends Room<LobbyState> {
       client.send("start_game", { roomId: room.roomId, host });
     }
     console.log(`[lobby ${this.roomId}] starting -> house ${room.roomId}`);
-    // Give clients a beat to receive the message and join, then dispose.
-    this.clock.setTimeout(() => this.disconnect(), 2000);
+    // The lobby SURVIVES the round: players stay connected to it while they play
+    // and come back here when the round ends, instead of being kicked out to the
+    // menu. `started` only guards against double-starting during the hand-off, so
+    // clear it once everyone has had time to join the house.
+    this.clock.setTimeout(() => {
+      this.state.started = false;
+    }, 3000);
   }
 }

@@ -101,6 +101,10 @@ a.room.send("interview", { target: b.me.body });
 await a.waitFor("interview_open", 1500);
 const begin = await b.waitFor("interview_begin", 1500);
 check("the questioned human gets the chat + a persona", !!begin?.persona?.job, JSON.stringify(begin?.persona ?? {}));
+// They must be told WHICH guest they're posing as — the Detective addresses them
+// by that name, so they can't answer in character without it.
+const bName = b.room.state.people.get(b.me.body)?.name;
+check("the questioned human is told the guest name they're wearing", begin?.name === bName, begin?.name);
 
 a.clearInbox();
 a.room.send("interview_ask", { text: "who invited you?" });
